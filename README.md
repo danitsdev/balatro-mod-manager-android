@@ -7,6 +7,8 @@ A native Android app for finding, installing, updating, and managing Balatro mod
 ![Android 8 or newer](https://img.shields.io/badge/platform-Android%208%2B-3DDC84)
 ![Beta status](https://img.shields.io/badge/status-beta-f2b84b)
 
+[![Download latest APK](https://img.shields.io/badge/download-latest%20APK-2ea44f?logo=android)](https://github.com/danitsdev/balatro-mod-manager-android/releases/latest/download/Balatro-Mod-Manager.apk)
+
 This project is directly inspired by
 [Balatro Mod Manager by Skyline](https://github.com/skyline69/balatro-mod-manager)
 and brings its familiar mod-management workflow to a mobile-first, native Android
@@ -28,7 +30,7 @@ This is an independent community project, not an official upstream Android port.
 
 ## Install
 
-1. Download the APK from the repository's [releases page](../../releases).
+1. [Download the latest APK](https://github.com/danitsdev/balatro-mod-manager-android/releases/latest/download/Balatro-Mod-Manager.apk).
 2. Open the APK on your Android device and allow installation from that source if Android asks.
 3. Launch Balatro Mod Manager and select the folder that contains your build's `ASET` directory.
 4. Grant folder access. The app validates `ASET/Mods` before making any changes.

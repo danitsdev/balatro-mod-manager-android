@@ -64,9 +64,9 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk "dist/Balatro-Mod-Manager-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/Balatro-Mod-Manager.apk"
           cd dist
-          sha256sum "Balatro-Mod-Manager-${GITHUB_REF_NAME}.apk" > "Balatro-Mod-Manager-${GITHUB_REF_NAME}.apk.sha256"
+          sha256sum "Balatro-Mod-Manager.apk" > "Balatro-Mod-Manager.apk.sha256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
@@ -75,12 +75,12 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      - name: Create GitHub prerelease
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
-            --prerelease \
+            --latest \
             --title "Balatro Mod Manager ${GITHUB_REF_NAME}" \
             --generate-notes
