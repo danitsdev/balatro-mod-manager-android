@@ -1,0 +1,11 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:left="14dp"
+        android:top="14dp"
+        android:right="14dp"
+        android:bottom="14dp">
+        <bitmap
+            android:gravity="fill"
+            android:src="@drawable/bmm_icon" />
+    </item>
+</layer-list>

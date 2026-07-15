@@ -1,0 +1,34 @@
+name: Android bug
+description: Report a problem in the Android app.
+title: "[Android] "
+labels:
+  - android
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open app\n2. Select folder\n3. ..."
+    validations:
+      required: true
+  - type: input
+    id: android-version
+    attributes:
+      label: Android version/device
+    validations:
+      required: false
+  - type: textarea
+    id: storage
+    attributes:
+      label: Storage/provider details
+      description: Which folder/provider did you select? Do not paste private paths or sensitive data.
+    validations:
+      required: false

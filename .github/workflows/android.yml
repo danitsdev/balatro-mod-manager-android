@@ -1,0 +1,45 @@
+name: Android
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Unit tests
+        run: ./gradlew test
+
+      - name: Android lint
+        run: ./gradlew lintDebug
+
+      - name: Assemble debug
+        run: ./gradlew assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: Balatro-Mod-Manager-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
