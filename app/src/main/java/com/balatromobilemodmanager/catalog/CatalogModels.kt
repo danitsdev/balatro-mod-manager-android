@@ -85,8 +85,16 @@ data class CatalogMod(
         get() = folderName.ifBlank { title }.sanitizeFolderName()
 
     val supportsAutomaticInstall: Boolean
-        get() = downloadUrl.startsWith("bmi://", ignoreCase = true) ||
-            downloadUrl.substringBefore('?').substringBefore('#').endsWith(".zip", ignoreCase = true)
+        get() {
+            if (downloadUrl.startsWith("bmi://", ignoreCase = true)) return true
+            if (!downloadUrl.startsWith("https://", ignoreCase = true)) return false
+
+            // GitHub/codeload archive URLs commonly end in a tag or commit rather
+            // than ".zip". The installer validates the downloaded ZIP contents
+            // before staging, so the URL suffix is not a reliable safety check.
+            val path = downloadUrl.substringBefore('?').substringBefore('#').lowercase()
+            return UnsupportedArchiveSuffixes.none { suffix -> path.endsWith(suffix) }
+        }
 
     val searchableText: String
         get() = buildString {
@@ -96,6 +104,14 @@ data class CatalogMod(
             append(description.take(300))
         }
 }
+
+private val UnsupportedArchiveSuffixes = listOf(
+    ".7z",
+    ".rar",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+)
 
 internal fun List<CatalogMod>.deduplicatedCatalog(): List<CatalogMod> {
     val byTitle = linkedMapOf<String, CatalogMod>()

@@ -49,10 +49,19 @@ class ModSearchTest {
     }
 
     @Test
-    fun automaticInstallRequiresZipUrl() {
+    fun automaticInstallAcceptsExtensionlessHttpsArchives() {
         assertTrue(CatalogMod(id = "a", title = "A", author = "A", downloadUrl = "https://example.com/mod.zip").supportsAutomaticInstall)
         assertTrue(CatalogMod(id = "bmi", title = "BMI", author = "BMI", downloadUrl = "bmi://author@mod").supportsAutomaticInstall)
+        assertTrue(
+            CatalogMod(
+                id = "banner",
+                title = "Banner",
+                author = "SylviBlossom",
+                downloadUrl = "https://codeload.github.com/SylviBlossom/Banner/zip/refs/tags/v1.2.1",
+            ).supportsAutomaticInstall,
+        )
         assertTrue(!CatalogMod(id = "b", title = "B", author = "B", downloadUrl = "https://example.com/mod.tar").supportsAutomaticInstall)
+        assertTrue(!CatalogMod(id = "c", title = "C", author = "C", downloadUrl = "http://example.com/mod.zip").supportsAutomaticInstall)
     }
 
     @Test
