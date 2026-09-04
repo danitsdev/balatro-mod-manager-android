@@ -5,7 +5,10 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.balatromobilemodmanager.catalog.CatalogMod
 import com.balatromobilemodmanager.catalog.ManagedInstallManifest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -73,6 +76,8 @@ class ModInstaller(
                 existing = existing,
                 archive = archive,
                 inspection = inspection,
+                title = mod.title,
+                onProgress = onProgress,
             )
             if (existing == null) steamoddedBlacklist.remove(modsDir, folderName)
 
@@ -89,6 +94,8 @@ class ModInstaller(
             onProgress("Saving managed manifest")
             manifestRepository.save(manifest)
             InstallResult.Installed(manifest)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (exception: Exception) {
             InstallResult.Failed(exception.userFacingInstallMessage(mod.title))
         } finally {
@@ -186,12 +193,14 @@ class ModInstaller(
         throw IllegalStateException("The download exceeded the redirect limit.")
     }
 
-    private fun commitArchiveToMods(
+    private suspend fun commitArchiveToMods(
         modsDir: DocumentFile,
         folderName: String,
         existing: DocumentFile?,
         archive: File,
         inspection: ArchiveInspection,
+        title: String,
+        onProgress: suspend (String) -> Unit,
     ) {
         val stageName = "BMMM-STAGING-${folderName}-${UUID.randomUUID()}"
         val backupName = "BMMM-BACKUP-${folderName}-${UUID.randomUUID()}"
@@ -199,7 +208,8 @@ class ModInstaller(
             ?: throw IllegalStateException("Could not create the staging folder in Mods.")
         var existingMovedToBackup = false
         try {
-            extractZipToSafStage(archive, stage, inspection)
+            extractZipToSafStage(archive, stage, inspection, title, onProgress)
+            onProgress("Activating $title")
             if (existing != null && !existing.renameTo(backupName)) {
                 throw IllegalStateException("Could not prepare a backup of the previous version.")
             }
@@ -220,16 +230,32 @@ class ModInstaller(
         }
     }
 
-    private fun extractZipToSafStage(
+    private suspend fun extractZipToSafStage(
         archive: File,
         stage: DocumentFile,
         inspection: ArchiveInspection,
+        title: String,
+        onProgress: suspend (String) -> Unit,
     ) {
         val allowed = inspection.entries.mapTo(hashSetOf()) { it.path }
         val directories = mutableMapOf("" to stage)
+        val totalFiles = inspection.fileCount
+        val progressInterval = (totalFiles / 100).coerceAtLeast(1)
+        var copiedFiles = 0
+        var lastReportedFiles = -1
+
+        suspend fun reportProgress(force: Boolean = false) {
+            if (!force && copiedFiles != 1 && copiedFiles - lastReportedFiles < progressInterval) return
+            lastReportedFiles = copiedFiles
+            val percent = if (totalFiles == 0) 100 else copiedFiles * 100 / totalFiles
+            onProgress("Installing $title: $copiedFiles/$totalFiles files ($percent%)")
+        }
+
+        reportProgress(force = true)
         ZipFile(archive).use { zip ->
             val entries = zip.entries()
             while (entries.hasMoreElements()) {
+                currentCoroutineContext().ensureActive()
                 val entry = entries.nextElement()
                 val path = entry.name.normalizedZipPath()
                 if (path !in allowed) continue
@@ -241,16 +267,26 @@ class ModInstaller(
                     val parentPath = relative.substringBeforeLast('/', "")
                     val fileName = relative.substringAfterLast('/')
                     val parent = directories.ensureSafDirectory(parentPath)
-                    val target = parent.findFile(fileName)?.takeIf { it.isFile }
-                        ?: parent.createFile("application/octet-stream", fileName)
+                    // Staging is empty and archive paths are unique. Avoid findFile():
+                    // many SAF providers enumerate every sibling for every lookup,
+                    // which makes large mods effectively O(n^2) to install.
+                    val target = parent.createFile("application/octet-stream", fileName)
                         ?: throw IllegalStateException("Could not create file $relative.")
                     appContext.contentResolver.openOutputStream(target.uri, "w")?.use { rawOutput ->
                         BufferedOutputStream(rawOutput, IO_BUFFER_SIZE).use { output ->
                             BufferedInputStream(zip.getInputStream(entry), IO_BUFFER_SIZE).use { input ->
-                                input.copyTo(output, IO_BUFFER_SIZE)
+                                val buffer = ByteArray(IO_BUFFER_SIZE)
+                                while (true) {
+                                    currentCoroutineContext().ensureActive()
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    output.write(buffer, 0, read)
+                                }
                             }
                         }
                     } ?: throw IllegalStateException("Could not open $relative for writing.")
+                    copiedFiles += 1
+                    reportProgress(force = copiedFiles == totalFiles)
                 }
             }
         }
@@ -263,8 +299,7 @@ class ModInstaller(
         var current = getValue("")
         path.split('/').forEach { segment ->
             currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
-            current = this[currentPath] ?: current.findFile(segment)?.takeIf { it.isDirectory }
-                ?: current.createDirectory(segment)
+            current = this[currentPath] ?: current.createDirectory(segment)
                 ?: throw IllegalStateException("Could not create folder $currentPath.")
             this[currentPath] = current
         }

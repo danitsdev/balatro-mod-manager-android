@@ -1,6 +1,7 @@
 package com.balatromobilemodmanager.installer
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.util.zip.ZipEntry
@@ -82,6 +83,36 @@ class ZipArchiveInspectorTest {
         ZipOutputStream(file.outputStream()).use { }
 
         inspector.inspect(file)
+    }
+
+    @Test
+    fun rejectsDuplicateFilePathsBeforeStagingExtraction() {
+        val zip = createZip(
+            "mod/main.lua" to "print('first')",
+            "mod\\main.lua" to "print('second')",
+        )
+
+        val error = runCatching { inspector.inspect(zip) }.exceptionOrNull()
+
+        assertTrue(error is ArchiveValidationException.UnsafePath)
+        assertTrue(error?.message.orEmpty().contains("duplicate path"))
+    }
+
+    @Test
+    fun acceptsLargeWrappedModArchive() {
+        val file = File.createTempFile("large-mod", ".zip")
+        ZipOutputStream(file.outputStream()).use { output ->
+            repeat(1_822) { index ->
+                output.putNextEntry(ZipEntry("All-In-Jest-0.7.2/Items/Jokers/joker-$index.lua"))
+                output.write("return $index".toByteArray())
+                output.closeEntry()
+            }
+        }
+
+        val inspection = inspector.inspect(file)
+
+        assertEquals(1_822, inspection.fileCount)
+        assertEquals("All-In-Jest-0.7.2", inspection.installRoot)
     }
 
     private fun createZip(vararg files: Pair<String, String>): File {

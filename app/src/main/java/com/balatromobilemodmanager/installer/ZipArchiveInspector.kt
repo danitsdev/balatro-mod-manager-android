@@ -72,6 +72,14 @@ class ZipArchiveInspector(
     }
 
     private fun validateNoPathConflicts(entries: List<ArchiveEntry>) {
+        val seenPaths = mutableSetOf<String>()
+        entries.forEach { entry ->
+            if (!seenPaths.add(entry.path)) {
+                throw ArchiveValidationException.UnsafePath(
+                    "The archive contains a duplicate path: ${entry.path}.",
+                )
+            }
+        }
         val filePaths = entries.filterNot { it.isDirectory }.map { it.path }.toSet()
         entries.forEach { entry ->
             val parts = entry.path.split('/')
