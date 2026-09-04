@@ -35,7 +35,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -44,15 +43,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import com.balatromobilemodmanager.ModThumbnail
 import com.balatromobilemodmanager.ModStripedBackground
+import com.balatromobilemodmanager.OperationState
 import com.balatromobilemodmanager.R
 import com.balatromobilemodmanager.catalog.CatalogMod
 import com.balatromobilemodmanager.domain.ModPrimaryAction
@@ -74,7 +72,7 @@ internal fun ModDetailScreen(
     installed: Boolean,
     canGetOfficial: Boolean,
     hasUpdate: Boolean,
-    isDownloading: Boolean,
+    operation: OperationState.Running?,
     enabled: Boolean?,
     padding: PaddingValues,
     onBack: () -> Unit,
@@ -124,28 +122,12 @@ internal fun ModDetailScreen(
 
         item {
             Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
-                if (mod.thumbnailUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = mod.thumbnailUrl,
-                        contentDescription = mod.title,
-                        contentScale = ContentScale.Crop,
-                        placeholder = painterResource(R.drawable.cover),
-                        error = painterResource(R.drawable.cover),
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    androidx.compose.foundation.Image(
-                        painter = painterResource(R.drawable.cover),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                ModThumbnail(mod, Modifier.fillMaxSize())
             }
         }
 
         item {
-            if (action == ModPrimaryAction.Installed && !isDownloading) {
+            if (action == ModPrimaryAction.Installed && operation == null) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     Button(
                         onClick = {
@@ -190,18 +172,19 @@ internal fun ModDetailScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onInstall()
                     },
-                    enabled = actionEnabled && !isDownloading,
+                    enabled = actionEnabled && operation == null,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape = RoundedCornerShape(5.dp),
+                    contentPadding = if (operation == null) PaddingValues(horizontal = 24.dp) else PaddingValues(0.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isDownloading) BmmColor.Green else actionColor,
+                        containerColor = if (operation != null) BmmColor.Green else actionColor,
                         contentColor = Color.White,
-                        disabledContainerColor = if (isDownloading) BmmColor.Green else BmmColor.Neutral,
+                        disabledContainerColor = if (operation != null) BmmColor.Green.copy(alpha = 0.58f) else BmmColor.Neutral,
                         disabledContentColor = Color.White.copy(alpha = 0.82f),
                     ),
                 ) {
-                    if (isDownloading) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    if (operation != null) {
+                        ModOperationProgress(operation)
                     } else {
                         Icon(
                             if (action == ModPrimaryAction.Update) {

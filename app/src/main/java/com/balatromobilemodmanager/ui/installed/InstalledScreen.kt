@@ -225,8 +225,8 @@ fun InstalledScreen(
                     it.folderName.equals(local.folderName, ignoreCase = true)
                 }
                 val hasUpdate = manifest?.let { catalog.hasUpdateFor(it) } == true
-                val isDownloading = state.operation is OperationState.Running &&
-                    (state.operation as OperationState.Running).downloadingModId == catalog.id
+                val operation = (state.operation as? OperationState.Running)
+                    ?.takeIf { it.downloadingModId == catalog.id }
 
                 DesktopModCard(
                     mod = catalog,
@@ -234,7 +234,7 @@ fun InstalledScreen(
                     enabled = local.enabled,
                     hasUpdate = hasUpdate,
                     canGetOfficial = manifest == null && item.hasCatalogMatch,
-                    isDownloading = isDownloading,
+                    operation = operation,
                     onOpen = { onOpenMod(catalog) },
                     onInstall = { onInstall(catalog) },
                     onToggleEnabled = { onSetLocalModEnabled(local.folderName, !local.enabled) },
@@ -256,8 +256,8 @@ fun InstalledScreen(
                     it.folderName.equals(local.folderName, ignoreCase = true)
                 }
                 val hasUpdate = manifest?.let { catalog.hasUpdateFor(it) } == true
-                val isDownloading = state.operation is OperationState.Running &&
-                    (state.operation as OperationState.Running).downloadingModId == catalog.id
+                val operation = (state.operation as? OperationState.Running)
+                    ?.takeIf { it.downloadingModId == catalog.id }
 
                 DesktopModCard(
                     mod = catalog,
@@ -265,7 +265,7 @@ fun InstalledScreen(
                     enabled = local.enabled,
                     hasUpdate = hasUpdate,
                     canGetOfficial = manifest == null && item.hasCatalogMatch,
-                    isDownloading = isDownloading,
+                    operation = operation,
                     onOpen = { onOpenMod(catalog) },
                     onInstall = { onInstall(catalog) },
                     onToggleEnabled = { onSetLocalModEnabled(local.folderName, !local.enabled) },

@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,11 +25,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -38,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import com.balatromobilemodmanager.ModThumbnail
+import com.balatromobilemodmanager.OperationState
 import com.balatromobilemodmanager.catalog.CatalogMod
 import com.balatromobilemodmanager.domain.ModPrimaryAction
 import com.balatromobilemodmanager.domain.resolveModPrimaryAction
@@ -51,7 +56,7 @@ internal fun DesktopModCard(
     enabled: Boolean?,
     hasUpdate: Boolean,
     canGetOfficial: Boolean,
-    isDownloading: Boolean,
+    operation: OperationState.Running?,
     onOpen: () -> Unit,
     onInstall: () -> Unit,
     onToggleEnabled: () -> Unit,
@@ -128,19 +133,19 @@ internal fun DesktopModCard(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onInstall()
                         },
-                        enabled = supported && action != ModPrimaryAction.Installed && !isDownloading,
+                        enabled = supported && action != ModPrimaryAction.Installed && operation == null,
                         modifier = Modifier.weight(1f).height(32.dp),
                         shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(horizontal = 6.dp),
+                        contentPadding = if (operation == null) PaddingValues(horizontal = 6.dp) else PaddingValues(0.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BmmColor.Green,
                             contentColor = Color.White,
-                            disabledContainerColor = if (isDownloading) BmmColor.Green else BmmColor.Neutral,
+                            disabledContainerColor = if (operation != null) BmmColor.Green.copy(alpha = 0.58f) else BmmColor.Neutral,
                             disabledContentColor = Color.White.copy(alpha = 0.82f),
                         ),
                     ) {
-                        if (isDownloading) {
-                            CircularProgressIndicator(Modifier.size(14.dp), color = BmmColor.Cream, strokeWidth = 2.dp)
+                        if (operation != null) {
+                            ModOperationProgress(operation)
                         } else {
                             Icon(
                                 imageVector = if (action == ModPrimaryAction.Update) {
@@ -175,6 +180,41 @@ internal fun DesktopModCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun ModOperationProgress(operation: OperationState.Running) {
+    val target = operation.progress?.coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(targetValue = target ?: 0f, label = "mod-operation-progress")
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (target != null) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth(animatedProgress)
+                    .background(BmmColor.GreenStrong),
+            )
+        } else {
+            LinearProgressIndicator(
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
+                color = BmmColor.GreenStrong,
+                trackColor = Color.Transparent,
+            )
+        }
+        Text(operation.buttonLabel(), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    }
+}
+
+private fun OperationState.Running.buttonLabel(): String {
+    val percent = progress?.coerceIn(0f, 1f)?.let { (it * 100).toInt() }
+    return when {
+        message.contains("Downloading", ignoreCase = true) -> percent?.let { "Download $it%" } ?: "Downloading"
+        message.contains("Installing", ignoreCase = true) -> percent?.let { "Install $it%" } ?: "Installing"
+        message.contains("Inspecting", ignoreCase = true) -> "Inspecting"
+        message.contains("Activating", ignoreCase = true) -> "Activating"
+        else -> "Preparing"
     }
 }
 

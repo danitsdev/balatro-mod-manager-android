@@ -109,8 +109,8 @@ internal fun CatalogScreen(
             installed = selectedMod.isInstalled(state),
             canGetOfficial = manifest == null && localMod != null,
             hasUpdate = manifest?.let { selectedMod.hasUpdateFor(it) } == true,
-            isDownloading = state.operation is OperationState.Running &&
-                (state.operation as OperationState.Running).downloadingModId == selectedMod.id,
+            operation = (state.operation as? OperationState.Running)
+                ?.takeIf { it.downloadingModId == selectedMod.id },
             enabled = localMod?.enabled,
             padding = padding,
             onBack = onBackFromMod,
@@ -170,8 +170,8 @@ internal fun CatalogScreen(
                         enabled = localMod?.enabled,
                         hasUpdate = manifest?.let { mod.hasUpdateFor(it) } == true,
                         canGetOfficial = manifest == null && localMod != null,
-                        isDownloading = state.operation is OperationState.Running &&
-                            (state.operation as OperationState.Running).downloadingModId == mod.id,
+                        operation = (state.operation as? OperationState.Running)
+                            ?.takeIf { it.downloadingModId == mod.id },
                         onOpen = { onOpenMod(mod) },
                         onInstall = { onInstall(mod) },
                         onToggleEnabled = {
@@ -243,6 +243,8 @@ private fun CatalogThumbnailPrefetcher(
 ) {
     val context = LocalContext.current
     val imageLoader = context.imageLoader
+    val thumbnailWidthPx = (ThumbnailPrefetchWidthDp * context.resources.displayMetrics.density).toInt()
+    val thumbnailHeightPx = (thumbnailWidthPx / ThumbnailAspectRatio).toInt()
     val queuedUrls = remember { mutableSetOf<String>() }
     val requests = remember { mutableListOf<Disposable>() }
 
@@ -270,10 +272,11 @@ private fun CatalogThumbnailPrefetcher(
                     requests += imageLoader.enqueue(
                         ImageRequest.Builder(context)
                             .data(url)
-                            .size(1, 1)
+                            .size(thumbnailWidthPx, thumbnailHeightPx)
                             .precision(Precision.INEXACT)
                             .dispatcher(ThumbnailPrefetchDispatcher)
-                            .memoryCachePolicy(CachePolicy.DISABLED)
+                            .memoryCachePolicy(CachePolicy.ENABLED)
+                            .diskCachePolicy(CachePolicy.ENABLED)
                             .build()
                     )
                 }
@@ -283,6 +286,8 @@ private fun CatalogThumbnailPrefetcher(
 
 private const val ThumbnailPrefetchWindow = 12
 private const val ThumbnailPrefetchStartDelayMs = 5_000L
+private const val ThumbnailPrefetchWidthDp = 192
+private const val ThumbnailAspectRatio = 1.72f
 private val ThumbnailPrefetchDispatcher = Dispatchers.IO.limitedParallelism(2)
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -428,10 +433,14 @@ internal fun ModStripedBackground(mod: CatalogMod, modifier: Modifier = Modifier
 @Composable
 internal fun ModThumbnail(mod: CatalogMod, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    var loading by remember(mod.thumbnailUrl) { mutableStateOf(mod.thumbnailUrl.isNotBlank()) }
     val imageRequest = remember(mod.thumbnailUrl) {
         ImageRequest.Builder(context)
             .data(mod.thumbnailUrl)
             .precision(Precision.INEXACT)
+            .crossfade(true)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
             .build()
     }
 
@@ -441,22 +450,31 @@ internal fun ModThumbnail(mod: CatalogMod, modifier: Modifier = Modifier) {
             .clip(RoundedCornerShape(2.dp)),
         contentAlignment = Alignment.Center,
     ) {
+        androidx.compose.foundation.Image(
+            painter = painterResource(R.drawable.cover),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
         if (mod.thumbnailUrl.isNotBlank()) {
             AsyncImage(
                 model = imageRequest,
                 contentDescription = mod.title,
                 contentScale = ContentScale.Crop,
-                placeholder = painterResource(R.drawable.cover),
-                error = painterResource(R.drawable.cover),
+                onLoading = { loading = true },
+                onSuccess = { loading = false },
+                onError = { loading = false },
                 modifier = Modifier.fillMaxSize(),
             )
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(26.dp),
+                    color = BmmColor.Gold,
+                    strokeWidth = 2.dp,
+                )
+            }
         } else {
-            androidx.compose.foundation.Image(
-                painter = painterResource(R.drawable.cover),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+            loading = false
         }
     }
 }

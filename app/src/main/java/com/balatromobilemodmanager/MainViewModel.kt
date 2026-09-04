@@ -67,7 +67,11 @@ data class CatalogInfo(
 
 sealed interface OperationState {
     data object Idle : OperationState
-    data class Running(val message: String, val downloadingModId: String? = null) : OperationState
+    data class Running(
+        val message: String,
+        val downloadingModId: String? = null,
+        val progress: Float? = null,
+    ) : OperationState
     data class Done(val message: String) : OperationState
     data class Error(val message: String) : OperationState
 }
@@ -276,8 +280,12 @@ class MainViewModel(
                 treeUri = treeUri,
                 mod = modToInstall,
                 replaceUnmanagedFolder = externalLocal?.folderName,
-            ) { phase ->
-                operation.value = OperationState.Running(phase, downloadingModId = modToInstall.id)
+            ) { progress ->
+                operation.value = OperationState.Running(
+                    progress.message,
+                    downloadingModId = modToInstall.id,
+                    progress = progress.fraction,
+                )
             }) {
                 is InstallResult.Installed -> {
                     managedInstalls.value = managedInstalls.value
@@ -334,8 +342,12 @@ class MainViewModel(
                         recordOperation("update", mod.title, OperationState.Error(error.message ?: "Could not resolve download."))
                         return@forEachIndexed
                     }
-                val resultState = when (val result = installer.install(treeUri, modToInstall) { phase ->
-                    operation.value = OperationState.Running("${index + 1}/${targets.size}: $phase", downloadingModId = mod.id)
+                val resultState = when (val result = installer.install(treeUri, modToInstall) { progress ->
+                    operation.value = OperationState.Running(
+                        "${index + 1}/${targets.size}: ${progress.message}",
+                        downloadingModId = mod.id,
+                        progress = progress.fraction,
+                    )
                 }) {
                     is InstallResult.Installed -> { successCount += 1; OperationState.Done("${result.manifest.title} updated.") }
                     is InstallResult.Uninstalled -> OperationState.Done("${result.folderName} removed.")
@@ -360,8 +372,8 @@ class MainViewModel(
         managedInstalls.value = previousManaged.filterNot { it.folderName.equals(manifest.folderName, true) }
         viewModelScope.launch {
             operation.value = OperationState.Running("Removing ${manifest.title}")
-            val resultState = when (val result = installer.uninstall(treeUri, manifest) { phase ->
-                operation.value = OperationState.Running(phase)
+            val resultState = when (val result = installer.uninstall(treeUri, manifest) { progress ->
+                operation.value = OperationState.Running(progress.message, progress = progress.fraction)
             }) {
                 is InstallResult.Installed -> OperationState.Done("${result.manifest.title} installed.")
                 is InstallResult.Uninstalled -> OperationState.Done("${result.folderName} removed.")

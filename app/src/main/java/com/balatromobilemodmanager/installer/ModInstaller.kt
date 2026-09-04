@@ -31,7 +31,7 @@ class ModInstaller(
         treeUri: Uri,
         mod: CatalogMod,
         replaceUnmanagedFolder: String? = null,
-        onProgress: suspend (String) -> Unit = {},
+        onProgress: suspend (InstallProgress) -> Unit = {},
     ): InstallResult = withContext(Dispatchers.IO) {
         val downloadUrl = mod.downloadUrl.trim()
         if (!downloadUrl.startsWith("https://")) {
@@ -41,7 +41,7 @@ class ModInstaller(
             return@withContext InstallResult.Failed("${mod.title} does not provide a ZIP supported by automatic installation.")
         }
 
-        onProgress("Opening ASET/Mods")
+        onProgress(InstallProgress("Opening ASET/Mods"))
         val modsDir = resolveModsDir(treeUri)
             ?: return@withContext InstallResult.Failed("ASET/Mods could not be opened with the current folder permission.")
         if (!modsDir.canWrite()) {
@@ -58,10 +58,10 @@ class ModInstaller(
 
         val workDir = File(appContext.cacheDir, "install-${UUID.randomUUID()}").apply { mkdirs() }
         try {
-            onProgress("Downloading ${mod.title}")
+            onProgress(InstallProgress("Downloading ${mod.title}", 0f))
             val archive = File(workDir, "download.zip")
-            download(downloadUrl, archive, onProgress)
-            onProgress("Inspecting archive")
+            download(downloadUrl, archive, mod.title, onProgress)
+            onProgress(InstallProgress("Inspecting archive"))
             val inspection = runCatching { inspector.inspect(archive) }
                 .getOrElse { error ->
                     if (error is java.util.zip.ZipException) {
@@ -69,7 +69,7 @@ class ModInstaller(
                     }
                     throw error
                 }
-            onProgress("Installing ${mod.title}")
+            onProgress(InstallProgress("Installing ${mod.title}", 0f))
             commitArchiveToMods(
                 modsDir = modsDir,
                 folderName = folderName,
@@ -91,7 +91,7 @@ class ModInstaller(
                 fileCount = inspection.fileCount,
                 totalBytes = inspection.totalBytes,
             )
-            onProgress("Saving managed manifest")
+            onProgress(InstallProgress("Saving managed manifest", 1f))
             manifestRepository.save(manifest)
             InstallResult.Installed(manifest)
         } catch (cancellation: CancellationException) {
@@ -112,19 +112,19 @@ class ModInstaller(
     suspend fun uninstall(
         treeUri: Uri,
         manifest: ManagedInstallManifest,
-        onProgress: suspend (String) -> Unit = {},
+        onProgress: suspend (InstallProgress) -> Unit = {},
     ): InstallResult = withContext(Dispatchers.IO) {
-        onProgress("Opening ASET/Mods")
+        onProgress(InstallProgress("Opening ASET/Mods"))
         val modsDir = resolveModsDir(treeUri)
             ?: return@withContext InstallResult.Failed("ASET/Mods could not be opened with the current folder permission.")
         val target = modsDir.findFile(manifest.folderName)
             ?: return@withContext InstallResult.Failed("${manifest.folderName} no longer exists in Mods.")
-        onProgress("Removing ${manifest.folderName}")
+        onProgress(InstallProgress("Removing ${manifest.folderName}"))
         if (!target.deleteTreeSaf()) {
             return@withContext InstallResult.Failed("Could not delete ${manifest.folderName}.")
         }
         steamoddedBlacklist.remove(modsDir, manifest.folderName)
-        onProgress("Removing managed manifest")
+        onProgress(InstallProgress("Removing managed manifest"))
         manifestRepository.delete(manifest.folderName)
         InstallResult.Uninstalled(manifest.folderName)
     }
@@ -132,7 +132,8 @@ class ModInstaller(
     private suspend fun download(
         url: String,
         target: File,
-        onProgress: suspend (String) -> Unit,
+        title: String,
+        onProgress: suspend (InstallProgress) -> Unit,
     ) {
         var current = URL(url)
         repeat(MAX_REDIRECTS) {
@@ -163,11 +164,12 @@ class ModInstaller(
                     throw ArchiveValidationException.TooLarge("Download exceeds the app size limit.")
                 }
                 var copied = 0L
-                var lastPercent = -1L
+                var lastPercent = -1
                 BufferedInputStream(connection.inputStream, IO_BUFFER_SIZE).use { input ->
                     BufferedOutputStream(FileOutputStream(target), IO_BUFFER_SIZE).use { output ->
                         val buffer = ByteArray(IO_BUFFER_SIZE)
                         while (true) {
+                            currentCoroutineContext().ensureActive()
                             val read = input.read(buffer)
                             if (read < 0) break
                             copied += read
@@ -176,10 +178,15 @@ class ModInstaller(
                             }
                             output.write(buffer, 0, read)
                             if (contentLength != null) {
-                                val percent = copied * 100L / contentLength
-                                if (percent >= lastPercent + 10L) {
+                                val percent = (copied * 100L / contentLength).coerceAtMost(100).toInt()
+                                if (percent > lastPercent) {
                                     lastPercent = percent
-                                    onProgress("Downloading ${percent.coerceAtMost(100)}%")
+                                    onProgress(
+                                        InstallProgress(
+                                            message = "Downloading $title: $percent%",
+                                            fraction = percent / 100f,
+                                        ),
+                                    )
                                 }
                             }
                         }
@@ -200,7 +207,7 @@ class ModInstaller(
         archive: File,
         inspection: ArchiveInspection,
         title: String,
-        onProgress: suspend (String) -> Unit,
+        onProgress: suspend (InstallProgress) -> Unit,
     ) {
         val stageName = "BMMM-STAGING-${folderName}-${UUID.randomUUID()}"
         val backupName = "BMMM-BACKUP-${folderName}-${UUID.randomUUID()}"
@@ -209,7 +216,7 @@ class ModInstaller(
         var existingMovedToBackup = false
         try {
             extractZipToSafStage(archive, stage, inspection, title, onProgress)
-            onProgress("Activating $title")
+            onProgress(InstallProgress("Activating $title", 1f))
             if (existing != null && !existing.renameTo(backupName)) {
                 throw IllegalStateException("Could not prepare a backup of the previous version.")
             }
@@ -235,7 +242,7 @@ class ModInstaller(
         stage: DocumentFile,
         inspection: ArchiveInspection,
         title: String,
-        onProgress: suspend (String) -> Unit,
+        onProgress: suspend (InstallProgress) -> Unit,
     ) {
         val allowed = inspection.entries.mapTo(hashSetOf()) { it.path }
         val directories = mutableMapOf("" to stage)
@@ -248,7 +255,12 @@ class ModInstaller(
             if (!force && copiedFiles != 1 && copiedFiles - lastReportedFiles < progressInterval) return
             lastReportedFiles = copiedFiles
             val percent = if (totalFiles == 0) 100 else copiedFiles * 100 / totalFiles
-            onProgress("Installing $title: $copiedFiles/$totalFiles files ($percent%)")
+            onProgress(
+                InstallProgress(
+                    message = "Installing $title: $copiedFiles/$totalFiles files ($percent%)",
+                    fraction = percent / 100f,
+                ),
+            )
         }
 
         reportProgress(force = true)
@@ -318,6 +330,11 @@ class ModInstaller(
         const val IO_BUFFER_SIZE = 64 * 1024
     }
 }
+
+data class InstallProgress(
+    val message: String,
+    val fraction: Float? = null,
+)
 
 private fun DocumentFile.deleteTreeSaf(): Boolean {
     if (delete()) return true
