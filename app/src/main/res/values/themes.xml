@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.BalatroModManager" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#FAF9F6</item>
+        <item name="android:statusBarColor">#FAF9F6</item>
+    </style>
+</resources>

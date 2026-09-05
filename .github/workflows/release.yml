@@ -1,0 +1,86 @@
+name: Release Android APK
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Verify tag matches app version
+        shell: bash
+        run: |
+          APP_VERSION="$(grep -m 1 -E '^[[:space:]]*versionName = "' app/build.gradle.kts | cut -d '"' -f 2)"
+          test -n "$APP_VERSION" || (echo "versionName was not found" && exit 1)
+          test "$GITHUB_REF_NAME" = "v$APP_VERSION" || (
+            echo "Tag $GITHUB_REF_NAME does not match versionName $APP_VERSION"
+            exit 1
+          )
+
+      - name: Restore release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || (echo "ANDROID_KEYSTORE_BASE64 is not configured" && exit 1)
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bmm-release.jks"
+
+      - name: Test and assemble signed release
+        env:
+          BMM_KEYSTORE_PATH: ${{ runner.temp }}/bmm-release.jks
+          BMM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BMM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          BMM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$BMM_KEYSTORE_PASSWORD" || (echo "ANDROID_KEYSTORE_PASSWORD is not configured" && exit 1)
+          test -n "$BMM_KEY_ALIAS" || (echo "ANDROID_KEY_ALIAS is not configured" && exit 1)
+          test -n "$BMM_KEY_PASSWORD" || (echo "ANDROID_KEY_PASSWORD is not configured" && exit 1)
+          ./gradlew testDebugUnitTest lintDebug assembleRelease
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER" || (echo "apksigner was not found" && exit 1)
+          "$APKSIGNER" verify --verbose app/build/outputs/apk/release/app-release.apk
+
+      - name: Prepare release files
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/Balatro-Mod-Manager.apk"
+          cd dist
+          sha256sum "Balatro-Mod-Manager.apk" > "Balatro-Mod-Manager.apk.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: Balatro-Mod-Manager-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --latest \
+            --title "Balatro Mod Manager ${GITHUB_REF_NAME}" \
+            --generate-notes

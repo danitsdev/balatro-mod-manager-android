@@ -1,0 +1,4 @@
+<full-backup-content>
+    <exclude domain="file" path="." />
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>
