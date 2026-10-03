@@ -4,17 +4,18 @@ import android.content.Context
 import coil.annotation.ExperimentalCoilApi
 import coil.imageLoader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.time.Instant
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
-import org.jsoup.nodes.Node
-import org.jsoup.nodes.TextNode
 
 class CatalogRepository(
     private val appContext: Context,
@@ -23,6 +24,8 @@ class CatalogRepository(
         explicitNulls = false
     },
 ) {
+    private val readmeCacheMutex = Mutex()
+
     suspend fun loadLocalSnapshot(): CatalogSnapshot = withContext(Dispatchers.IO) {
         loadCachedSnapshotOrEmpty()
     }
@@ -30,13 +33,20 @@ class CatalogRepository(
     fun isCacheStale(maxAgeMs: Long = CACHE_MAX_AGE_MS): Boolean {
         val cached = cacheFile()
         if (!cached.exists()) return true
+        val needsFrameworkMigration = runCatching {
+            json.decodeFromString(CatalogSnapshot.serializer(), cached.readText()).mods
+        }.getOrDefault(emptyList()).let { mods ->
+            mods.any { it.author.equals("Steamopollys", ignoreCase = true) && it.title.equals("Steamodded", ignoreCase = true) } &&
+                mods.none { it.author.equals("Steamodded", ignoreCase = true) && it.title.equals("Steamodded", ignoreCase = true) }
+        }
+        if (needsFrameworkMigration) return true
         val ageMs = System.currentTimeMillis() - cached.lastModified()
         return ageMs < 0 || ageMs >= maxAgeMs
     }
 
     suspend fun refreshSnapshot(): CatalogSnapshot = withContext(Dispatchers.IO) {
-        val base = loadCachedSnapshotOrEmpty()
-        val snapshot = fetchOnlineCatalog(base)
+        loadCachedSnapshotOrEmpty()
+        val snapshot = fetchOnlineCatalog()
         writeCacheAtomically(snapshot)
         snapshot
     }
@@ -47,43 +57,119 @@ class CatalogRepository(
         if (file.exists()) file.delete()
         val temporary = File(file.parentFile, "${file.name}.tmp")
         if (temporary.exists()) temporary.delete()
+        readmeCacheDirectory().deleteRecursively()
         appContext.imageLoader.memoryCache?.clear()
         appContext.imageLoader.diskCache?.clear()
     }
 
-    suspend fun hydrateMod(mod: CatalogMod): CatalogMod = withContext(Dispatchers.IO) {
-        val id = mod.bmiId()
-        if (id.isBlank()) return@withContext mod
-        val detail = fetchMod(id).toCatalogMod(existing = mod, useBmiDownloadPlaceholder = true)
-        mod.mergeHydrated(detail)
+    suspend fun readCachedVersionReadme(
+        mod: CatalogMod,
+        versionNumber: String,
+    ): CatalogReadmeResult? = withContext(Dispatchers.IO) {
+        val cacheFile = readmeCacheFile(mod, versionNumber)
+        val markdown = readmeCacheMutex.withLock {
+            cacheFile.takeIf(File::exists)?.readText()
+        } ?: return@withContext null
+        val age = System.currentTimeMillis() - cacheFile.lastModified()
+        CatalogReadmeResult(
+            markdown = markdown,
+            available = markdown.isNotBlank(),
+            isFresh = age in 0 until README_CACHE_MAX_AGE_MS,
+        )
     }
 
-    suspend fun resolveForInstall(mod: CatalogMod): CatalogMod = withContext(Dispatchers.IO) {
-        val url = mod.downloadUrl.trim()
-        if (url.startsWith("https://")) return@withContext mod
+    suspend fun refreshModDetails(mod: CatalogMod, selectedVersion: String): CatalogMod =
+        withContext(Dispatchers.IO) {
+            val latest = if (mod.packageUuid.isNotBlank()) {
+                fetchPackage(mod.packageUuid).toCatalogMod()
+                    ?: throw IllegalStateException("${mod.title} is no longer available on Thunderstore.")
+            } else mod
+            var refreshed = latest
+            listOf(latest.version, selectedVersion).distinct().forEach { versionNumber ->
+                if (refreshed.versions.any { it.versionNumber == versionNumber }) {
+                    val readme = loadVersionReadme(refreshed, versionNumber, forceRefresh = true)
+                    refreshed = refreshed.withReadme(versionNumber, readme.markdown)
+                }
+            }
+            refreshed
+        }
 
-        val id = mod.bmiId()
-        if (id.isBlank()) return@withContext mod
-        mod.copy(downloadUrl = postDownload(id))
+    suspend fun loadVersionReadme(
+        mod: CatalogMod,
+        versionNumber: String,
+        forceRefresh: Boolean = false,
+    ): CatalogReadmeResult = withContext(Dispatchers.IO) {
+        val cached = readCachedVersionReadme(mod, versionNumber)
+        val cacheFile = readmeCacheFile(mod, versionNumber)
+        if (!forceRefresh && cached?.isFresh == true) return@withContext cached
+
+        try {
+            val markdown = fetchReadme(mod.author, mod.title, versionNumber)
+            readmeCacheMutex.withLock {
+                cacheFile.parentFile?.mkdirs()
+                val temporary = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+                temporary.writeText(markdown)
+                if (!temporary.renameTo(cacheFile)) {
+                    temporary.copyTo(cacheFile, overwrite = true)
+                    temporary.delete()
+                }
+            }
+            CatalogReadmeResult(markdown, available = markdown.isNotBlank())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            cached ?: CatalogReadmeResult(markdown = "", available = false)
+        }
+    }
+
+    private fun CatalogMod.withReadme(versionNumber: String, markdown: String): CatalogMod = copy(
+        versions = versions.map { version ->
+            if (version.versionNumber == versionNumber) {
+                version.copy(
+                    readme = markdown,
+                    readmeLoaded = true,
+                    hasFullReadme = markdown.isNotBlank(),
+                )
+            } else version
+        },
+    )
+
+    suspend fun resolveForInstall(mod: CatalogMod): CatalogMod = withContext(Dispatchers.IO) {
+        if (mod.packageUuid.isBlank()) {
+            if (mod.downloadUrl.startsWith("https://", ignoreCase = true)) return@withContext mod
+            throw IllegalStateException("Thunderstore did not provide a download for ${mod.title}.")
+        }
+        val latestPackage = fetchPackage(mod.packageUuid).toCatalogMod()
+            ?: throw IllegalStateException("${mod.title} is no longer available on Thunderstore.")
+        val targetVersion = mod.requestedVersionNumber?.let { requested ->
+            latestPackage.versions.firstOrNull { it.versionNumber == requested }
+                ?: throw IllegalStateException("Version ${mod.requestedVersionNumber} of ${mod.title} is no longer available on Thunderstore.")
+        } ?: latestPackage.versions.firstOrNull()
+        targetVersion?.let(latestPackage::forVersion) ?: latestPackage
     }
 
     private fun loadCachedSnapshotOrEmpty(): CatalogSnapshot {
         val cached = cacheFile()
         if (cached.exists()) {
             runCatching {
-                return json.decodeFromString(CatalogSnapshot.serializer(), cached.readText()).deduplicated()
-            }.onFailure {
-                // A corrupt cache should never prevent a fresh BMI synchronization.
-                cached.delete()
+                json.decodeFromString(CatalogSnapshot.serializer(), cached.readText())
+            }.onSuccess { snapshot ->
+                if (snapshot.schemaVersion == CATALOG_SCHEMA_VERSION && snapshot.source == THUNDERSTORE_PACKAGE_API) {
+                    return snapshot.deduplicated()
+                }
             }
+            // The cache belongs to a different catalog schema or is unreadable.
+            cached.delete()
         }
-        return CatalogSnapshot(
-            schemaVersion = 3,
-            source = BMI_BASE_URL,
-            generatedAt = "",
-            mods = emptyList(),
-        )
+        return emptySnapshot()
     }
+
+    private fun emptySnapshot() = CatalogSnapshot(
+        schemaVersion = CATALOG_SCHEMA_VERSION,
+        source = THUNDERSTORE_PACKAGE_API,
+        generatedAt = "",
+        mods = emptyList(),
+    )
 
     private fun writeCacheAtomically(snapshot: CatalogSnapshot) {
         val target = cacheFile()
@@ -95,255 +181,233 @@ class CatalogRepository(
         }
     }
 
-    private fun fetchOnlineCatalog(base: CatalogSnapshot): CatalogSnapshot {
-        val baseById = base.mods.associateBy { it.id }.toMutableMap()
-        val onlineMods = mutableListOf<CatalogMod>()
-        var cursor: String? = null
-        do {
-            val page = fetchModsPage(cursor)
-            page.items.forEach { item ->
-                val id = item.id.orEmpty().ifBlank { item.dirName.orEmpty() }
-                if (id.isBlank()) return@forEach
-                val existing = baseById.remove(id)
-                onlineMods += item.toCatalogMod(existing, useBmiDownloadPlaceholder = true)
-            }
-            cursor = page.nextCursor
-        } while (!cursor.isNullOrBlank())
+    private fun fetchOnlineCatalog(): CatalogSnapshot {
+        val onlineMods = fetchPackages().mapNotNull { packageInfo ->
+            if (packageInfo.isDeprecated) return@mapNotNull null
+            packageInfo.toCatalogMod()
+        }
 
-        check(onlineMods.isNotEmpty()) { "BMI returned an empty catalog." }
+        check(onlineMods.isNotEmpty()) { "Thunderstore returned no active Balatro packages." }
 
         return CatalogSnapshot(
-            schemaVersion = 3,
-            source = BMI_BASE_URL,
+            schemaVersion = CATALOG_SCHEMA_VERSION,
+            source = THUNDERSTORE_PACKAGE_API,
             generatedAt = Instant.now().toString(),
             mods = onlineMods.deduplicatedCatalog(),
         )
     }
 
-    private fun CatalogSnapshot.deduplicated(): CatalogSnapshot = copy(mods = mods.deduplicatedCatalog())
+    private fun CatalogSnapshot.deduplicated(): CatalogSnapshot = copy(
+        mods = mods
+            .filterNot { it.id.lowercase() in UNAVAILABLE_ON_MOBILE }
+            .deduplicatedCatalog(),
+    )
 
-    private fun fetchModsPage(cursor: String?): BmiModsPage {
-        val params = mutableListOf("limit=200", "sort=downloads_desc")
-        if (!cursor.isNullOrBlank()) {
-            params += "cursor=${URLEncoder.encode(cursor, Charsets.UTF_8.name())}"
-        }
-        val url = URL("$BMI_BASE_URL/mods?${params.joinToString("&")}")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 12_000
-            readTimeout = 20_000
-            setRequestProperty("User-Agent", "BalatroModManagerAndroid/0.1")
-        }
+    private fun fetchPackages(): List<ThunderstorePackage> {
+        val connection = openGet(THUNDERSTORE_PACKAGE_API)
         try {
             val status = connection.responseCode
             if (status !in 200..299) {
-                throw IllegalStateException("BMI catalog returned HTTP $status.")
+                throw IllegalStateException("Thunderstore catalog returned HTTP $status.")
             }
             return connection.inputStream.use { input ->
-                json.decodeFromString(BmiModsPage.serializer(), input.bufferedReader().readText())
+                json.decodeFromString(ListSerializer(ThunderstorePackage.serializer()), input.bufferedReader().readText())
             }
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun fetchMod(id: String): BmiModItem {
-        val url = URL("$BMI_BASE_URL/mods/${id.encodedPathSegment()}")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 12_000
-            readTimeout = 20_000
-            setRequestProperty("User-Agent", "BalatroModManagerAndroid/0.1")
-        }
+    private fun fetchPackage(uuid: String): ThunderstorePackage {
+        val url = "$THUNDERSTORE_PACKAGE_API${uuid.encodedPathSegment()}/"
+        val connection = openGet(url)
         try {
             val status = connection.responseCode
             if (status !in 200..299) {
-                throw IllegalStateException("BMI mod detail returned HTTP $status.")
+                throw IllegalStateException("Thunderstore package details returned HTTP $status.")
             }
             return connection.inputStream.use { input ->
-                json.decodeFromString(BmiModItem.serializer(), input.bufferedReader().readText())
+                json.decodeFromString(ThunderstorePackage.serializer(), input.bufferedReader().readText())
             }
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun postDownload(id: String): String {
-        val url = URL("$BMI_BASE_URL/mods/${id.encodedPathSegment()}/download")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 12_000
-            readTimeout = 20_000
-            setRequestProperty("User-Agent", "BalatroModManagerAndroid/0.1")
+    private fun fetchReadme(namespace: String, packageName: String, version: String): String {
+        val url = buildString {
+            append(THUNDERSTORE_README_API)
+            append(namespace.encodedPathSegment()).append('/')
+            append(packageName.encodedPathSegment()).append('/')
+            append(version.encodedPathSegment()).append("/readme/")
         }
+        val connection = openGet(url)
         try {
             val status = connection.responseCode
-            if (status == 204) {
-                return fetchMod(id).downloadUrl.orEmpty().ifBlank {
-                    throw IllegalStateException("BMI did not return a download URL for $id.")
-                }
-            }
-            val body = (if (status in 200..299) connection.inputStream else connection.errorStream)?.use { input ->
-                input.bufferedReader().readText()
-            }.orEmpty()
             if (status !in 200..299) {
-                throw IllegalStateException("BMI download returned HTTP $status.")
+                throw IllegalStateException("Thunderstore README returned HTTP $status.")
             }
-            val parsed = runCatching {
-                json.decodeFromString(BmiDownloadResponse.serializer(), body)
-            }.getOrNull()
-            return parsed?.downloadUrl?.ifBlank { parsed.url }.orEmpty().ifBlank {
-                fetchMod(id).downloadUrl.orEmpty().ifBlank {
-                    throw IllegalStateException("BMI did not return a download URL for $id.")
-                }
+            return connection.inputStream.use { input ->
+                json.decodeFromString(ThunderstoreReadmeResponse.serializer(), input.bufferedReader().readText())
+                    .markdown
             }
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun BmiModItem.toCatalogMod(existing: CatalogMod?, useBmiDownloadPlaceholder: Boolean): CatalogMod {
-        val itemId = id.orEmpty()
-        val itemDirName = dirName.orEmpty()
-        val itemDescriptionHtml = descriptionHtml.orEmpty()
-        val itemDescription = description.orEmpty()
-        val itemName = name.orEmpty()
-        val itemAuthor = author.orEmpty()
-        val itemCategories = categories.orEmpty()
-        val itemRepo = repo.orEmpty()
-        val itemHomepage = homepage.orEmpty()
-        val itemDownloadUrl = downloadUrl.orEmpty()
-        val itemFolderName = folderName.orEmpty()
-        val itemVersion = version.orEmpty()
-        val itemThumbnailUrl = thumbnailUrl.orEmpty()
-        val itemSummary = summary.orEmpty()
+    private fun openGet(url: String): HttpURLConnection = (URL(url).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 12_000
+        readTimeout = 20_000
+        setRequestProperty("User-Agent", USER_AGENT)
+        setRequestProperty("Accept", "application/json")
+    }
 
-        val normalizedId = itemId.ifBlank { itemDirName }
-        val htmlMarkdown = itemDescriptionHtml.htmlToMarkdown()
-        val detailDescription = when {
-            itemDescription.isBlank() -> htmlMarkdown
-            htmlMarkdown.isBlank() -> itemDescription
-            itemDescription.plainDescriptionLength() > htmlMarkdown.plainDescriptionLength() * 3 / 2 -> itemDescription
-            else -> htmlMarkdown
-        }
-        val bmiDownload = if (useBmiDownloadPlaceholder && normalizedId.isNotBlank()) "bmi://$normalizedId" else ""
+    private fun ThunderstorePackage.toCatalogMod(): CatalogMod? {
+        if (isDeprecated) return null
+        if (isUnavailableOnMobile()) return null
+        // Thunderstore and r2modman treat the first version as the package's
+        // current version; keeping all displayed metadata tied to it avoids a
+        // stale description/icon when the active flag lags behind the index.
+        val latest = versions.firstOrNull() ?: return null
+        val title = name.trim().ifBlank { return null }
+        val authorName = owner.trim()
+        val packageId = catalogId()
+        if (packageId.isBlank()) return null
+
+        val description = latest.description.trim()
+        val dependencies = latest.dependencies
+        val icon = latest.icon
+        val lastUpdated = dateUpdated.toEpochMillis().takeIf { it > 0 }
+            ?: latest.dateCreated.toEpochMillis()
+
         return CatalogMod(
-            id = normalizedId,
-            title = itemName.ifBlank { existing?.title ?: normalizedId },
-            author = itemAuthor.ifBlank { existing?.author ?: "" },
-            categories = itemCategories.ifEmpty { existing?.categories ?: emptyList() },
-            repo = itemRepo.ifBlank { itemHomepage }.ifBlank { existing?.repo ?: "" },
-            downloadUrl = bmiDownload.ifBlank { itemDownloadUrl.ifBlank { existing?.downloadUrl ?: "" } },
-            folderName = itemFolderName.ifBlank { existing?.folderName ?: itemName.ifBlank { normalizedId } },
-            version = itemVersion.ifBlank { existing?.version ?: "" },
-            requiresSteamodded = (requiresSteamodded == true) || existing?.requiresSteamodded == true,
-            requiresTalisman = (requiresTalisman == true) || existing?.requiresTalisman == true,
-            automaticVersionCheck = existing?.automaticVersionCheck ?: true,
-            lastUpdated = (updatedAt ?: 0).takeIf { it > 0 } ?: existing?.lastUpdated ?: 0,
-            downloadsTotal = (downloads?.total ?: 0).takeIf { it > 0 } ?: existing?.downloadsTotal ?: 0,
-            downloadsToday = (downloads?.today ?: 0).takeIf { it > 0 } ?: existing?.downloadsToday ?: 0,
-            thumbnailUrl = itemThumbnailUrl.normalizedBmiUrl().ifBlank { existing?.thumbnailUrl ?: "" },
-            summary = itemSummary.ifBlank { existing?.summary ?: "" },
-            description = detailDescription.ifBlank { existing?.description ?: "" },
+            id = packageId,
+            title = title,
+            author = authorName,
+            categories = categories,
+            repo = latest.websiteUrl.ifBlank { packageUrl },
+            downloadUrl = latest.downloadUrl,
+            folderName = title,
+            version = latest.versionNumber,
+            requiresSteamodded = dependencies.any { it.isSteamoddedDependency() },
+            requiresAmulet = dependencies.any { it.isAmuletDependency() },
+            requiredPackages = dependencies.distinct(),
+            lastUpdated = lastUpdated,
+            downloadsTotal = versions.sumOf { it.downloads.coerceAtLeast(0) },
+            thumbnailUrl = icon,
+            summary = description.previewParagraph(),
+            description = description,
+            packageUuid = uuid,
+            versions = versions.map { version ->
+                CatalogVersion(
+                    versionNumber = version.versionNumber,
+                    description = version.description.trim(),
+                    downloadUrl = version.downloadUrl,
+                    dependencies = version.dependencies,
+                    dateCreated = version.dateCreated,
+                    downloads = version.downloads,
+                    fileSize = version.fileSize,
+                )
+            },
         )
     }
 
-    private fun CatalogMod.mergeHydrated(detail: CatalogMod): CatalogMod {
-        return copy(
-            title = detail.title.ifBlank { title },
-            author = detail.author.ifBlank { author },
-            categories = detail.categories.ifEmpty { categories },
-            repo = detail.repo.ifBlank { repo },
-            downloadUrl = detail.downloadUrl.ifBlank { downloadUrl },
-            folderName = detail.folderName.ifBlank { folderName },
-            version = detail.version.ifBlank { version },
-            requiresSteamodded = requiresSteamodded || detail.requiresSteamodded,
-            requiresTalisman = requiresTalisman || detail.requiresTalisman,
-            lastUpdated = detail.lastUpdated.takeIf { it > 0 } ?: lastUpdated,
-            downloadsTotal = detail.downloadsTotal.takeIf { it > 0 } ?: downloadsTotal,
-            downloadsToday = detail.downloadsToday.takeIf { it > 0 } ?: downloadsToday,
-            thumbnailUrl = detail.thumbnailUrl.ifBlank { thumbnailUrl },
-            summary = detail.summary.ifBlank { summary },
-            description = description.bestStructuredDescription(detail.description),
-        )
-    }
-
-    private fun String.normalizedBmiUrl(): String {
-        val value = trim()
+    private fun ThunderstorePackage.catalogId(): String {
+        val packageName = name.trim()
+        val packageOwner = owner.trim()
         return when {
-            value.startsWith("https://") -> value
-            value.startsWith("/") -> BMI_BASE_URL + value.normalizedThumbnailPath()
-            else -> ""
+            packageOwner.isNotBlank() && packageName.isNotBlank() -> "$packageOwner@$packageName"
+            fullName.isNotBlank() -> fullName
+            else -> packageName
         }
     }
 
-    private fun String.normalizedThumbnailPath(): String {
-        if (!startsWith("/thumbnails/") || !endsWith(".webp")) return this
-        val rawName = removePrefix("/thumbnails/").removeSuffix(".webp")
-        val encoded = rawName.encodedPathSegment()
-        return "/thumbnails/$encoded.webp"
+    private fun ThunderstorePackage.isUnavailableOnMobile(): Boolean {
+        val packageId = "${owner.trim()}@${name.trim()}".lowercase()
+        return packageId in UNAVAILABLE_ON_MOBILE
     }
 
-    private fun String.encodedPathSegment(): String {
-        return URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
+    private fun String.isSteamoddedDependency(): Boolean =
+        startsWith("Steamodded-Steamodded-", ignoreCase = true) ||
+            startsWith("Steamopollys-Steamodded-", ignoreCase = true)
+
+    private fun String.isAmuletDependency(): Boolean =
+        startsWith("just_frostice482-Amulet-", ignoreCase = true) ||
+            startsWith("MathIsFun0-Talisman-", ignoreCase = true)
+
+    private fun String.previewParagraph(): String {
+        val candidates = split(Regex("\\n\\s*\\n"))
+        return candidates.asSequence().mapNotNull { block ->
+            val text = block.lineSequence()
+                .map(String::trim)
+                .filter { line ->
+                    line.isNotBlank() &&
+                        !line.startsWith('#') &&
+                        !line.startsWith("![") &&
+                        !line.startsWith("<") &&
+                        !line.startsWith("```") &&
+                        !line.startsWith("~~~") &&
+                        !line.matches(Regex("[-*_]{3,}")) &&
+                        !line.startsWith("| ") &&
+                        !line.startsWith("[!") &&
+                        !line.removePrefix("> ").startsWith("[!")
+                }
+                .map { line ->
+                    line.removePrefix("> ")
+                        .replace(Regex("!\\[([^]]*)]\\([^)]*\\)"), "")
+                        .replace(Regex("\\[([^]]+)]\\([^)]*\\)"), "$1")
+                        .replace(Regex("<[^>]+>"), "")
+                        .replace(Regex("^\\s*[-*+]\\s+"), "")
+                        .replace(Regex("^\\s*\\d+[.)]\\s+"), "")
+                        .replace(Regex("[`*_~]"), "")
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                }
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+                .take(180)
+                .trim()
+            text.takeIf(String::isNotBlank)
+        }.firstOrNull().orEmpty()
     }
 
-    private fun CatalogMod.bmiId(): String {
-        return downloadUrl.substringAfter("://").takeIf { downloadUrl.startsWith("bmi://", ignoreCase = true) }
-            ?: id.takeIf { it.contains("@") }
-            ?: ""
-    }
+    private fun String.toEpochMillis(): Long =
+        runCatching { Instant.parse(this).toEpochMilli() }.getOrDefault(0)
 
-    private fun String.htmlToMarkdown(): String {
-        if (isBlank()) return ""
-        return Jsoup.parseBodyFragment(this).body().childNodes()
-            .joinToString("") { it.toMarkdown() }
-            .replace(Regex("[ \\t]+\n"), "\n")
-            .replace(Regex("\n{3,}"), "\n\n")
-            .trim()
-    }
+    private fun String.encodedPathSegment(): String =
+        URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
 
-    private fun Node.toMarkdown(): String = when (this) {
-        is TextNode -> wholeText
-        is Element -> {
-            val inner = childNodes().joinToString("") { it.toMarkdown() }.trim()
-            when (tagName().lowercase()) {
-                "h1" -> "# $inner\n\n"
-                "h2" -> "## $inner\n\n"
-                "h3" -> "### $inner\n\n"
-                "h4", "h5", "h6" -> "#### $inner\n\n"
-                "p", "div", "section" -> "$inner\n\n"
-                "br" -> "  \n"
-                "ul", "ol" -> "$inner\n"
-                "li" -> "- $inner\n"
-                "strong", "b" -> "**$inner**"
-                "em", "i" -> "*$inner*"
-                "code" -> "`$inner`"
-                "pre" -> "```\n$inner\n```\n\n"
-                "blockquote" -> inner.lines().joinToString("\n") { "> $it" } + "\n\n"
-                "a" -> "[$inner](${attr("href")})"
-                "img" -> "![${attr("alt")}](${attr("src")})\n\n"
-                else -> inner
-            }
-        }
-        else -> ""
-    }
-
-    private fun String.plainDescriptionLength(): Int = Jsoup.parse(this).text().length
-
-    private fun String.bestStructuredDescription(candidate: String): String {
-        if (isBlank()) return candidate
-        if (candidate.isBlank()) return this
-        val currentStructure = count { it == '#' || it == '\n' } + Regex("""\[[^]]+]\([^)]+\)""").findAll(this).count() * 3
-        val candidateStructure = countStructure(candidate)
-        return if (candidateStructure > currentStructure) candidate else this
-    }
-
-    private fun countStructure(value: String): Int =
-        value.count { it == '#' || it == '\n' } + Regex("""\[[^]]+]\([^)]+\)""").findAll(value).count() * 3
+    @kotlinx.serialization.Serializable
+    private data class ThunderstoreReadmeResponse(val markdown: String = "")
 
     private fun cacheFile(): File = File(appContext.filesDir, "catalog-cache.json")
 
+    private fun readmeCacheFile(mod: CatalogMod, versionNumber: String): File {
+        val key = "${mod.id.lowercase()}@$versionNumber"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+        return File(readmeCacheDirectory(), "$digest.md")
+    }
+
+    private fun readmeCacheDirectory(): File = File(appContext.filesDir, "readme-cache")
+
     private companion object {
-        const val BMI_BASE_URL = "https://api-bmi.dasguney.com"
+        const val THUNDERSTORE_PACKAGE_API = "https://thunderstore.io/c/balatro/api/v1/package/"
+        const val THUNDERSTORE_README_API = "https://thunderstore.io/api/experimental/package/"
+        const val CATALOG_SCHEMA_VERSION = 7
         const val CACHE_MAX_AGE_MS = 60L * 60L * 1_000L
+        const val README_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
+        const val USER_AGENT = "BalatroModManagerAndroid/0.2.0"
+        // Keep this list explicit: package categories do not reliably describe mobile compatibility.
+        val UNAVAILABLE_ON_MOBILE = setOf(
+            "ebkr@r2modman",
+            "kesomannen@galemodmanager",
+            "thunderstore@lovely",
+            "balatromultiplayer@multiplayerapi", // startup and auth both require Steam (G.STEAM / Steam ticket)
+            "balatromultiplayer@multiplayerspeedrun", // depends on MultiplayerAPI
+            "dshad@balatrovs", // Thunderstore archive is Windows-only; Android build is a separate GitHub release
+        )
     }
 }

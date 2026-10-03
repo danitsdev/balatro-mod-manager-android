@@ -12,12 +12,15 @@ import androidx.lifecycle.viewModelScope
 import com.balatromodmanager.catalog.CatalogFilters
 import com.balatromodmanager.catalog.CatalogMod
 import com.balatromodmanager.catalog.CatalogRepository
+import com.balatromodmanager.catalog.CatalogReadmeResult
 import com.balatromodmanager.catalog.CatalogSortMode
+import com.balatromodmanager.catalog.CatalogVersion
 import com.balatromodmanager.catalog.ManagedInstallManifest
 import com.balatromodmanager.catalog.allCategories
 import com.balatromodmanager.catalog.search
 import com.balatromodmanager.domain.matchesLocal
 import com.balatromodmanager.installer.InstallResult
+import com.balatromodmanager.installer.ArchiveImportResult
 import com.balatromodmanager.installer.LocalModRepository
 import com.balatromodmanager.installer.LocalModStatus
 import com.balatromodmanager.installer.ManagedInstallRepository
@@ -43,6 +46,7 @@ import kotlinx.coroutines.withContext
 
 data class MainUiState(
     val isLoading: Boolean,
+    val appUpdateNotice: AppUpdateNotice? = null,
     val isCatalogLoading: Boolean = true,
     val isCatalogRefreshing: Boolean = false,
     val persistedTreeUri: Uri? = null,
@@ -148,6 +152,7 @@ class MainViewModel(
     private val localModRepository: LocalModRepository,
     private val visualSettingsRepository: VisualSettingsRepository,
     private val installer: ModInstaller,
+    private val appUpdateRepository: AppUpdateRepository,
 ) : ViewModel() {
     private val detectedBuilds = MutableStateFlow<List<DetectedGameBuild>>(emptyList())
     private val catalogMods = MutableStateFlow<List<CatalogMod>>(emptyList())
@@ -159,7 +164,9 @@ class MainViewModel(
     private val filters = MutableStateFlow(CatalogFilters())
     private val visualSettings = MutableStateFlow(VisualSettings())
     private val operation = MutableStateFlow<OperationState>(OperationState.Idle)
+    private val appUpdateNotice = MutableStateFlow<AppUpdateNotice?>(null)
     private val hydratedModIds = mutableSetOf<String>()
+    private val hydratingReadmeVersions = mutableSetOf<String>()
     private var catalogRefreshJob: Job? = null
     private var catalogCacheClearJob: Job? = null
     private val localModsIoMutex = Mutex()
@@ -206,9 +213,10 @@ class MainViewModel(
         data.copy(operation = op, visualSettings = settings)
     }
 
-    val uiState: StateFlow<MainUiState> = combine(repository.observeAttachment(), appData) { attachment, data ->
+    val uiState: StateFlow<MainUiState> = combine(repository.observeAttachment(), appData, appUpdateNotice) { attachment, data, updateNotice ->
         MainUiState(
             isLoading = false,
+            appUpdateNotice = updateNotice,
             isCatalogLoading = data.isCatalogLoading,
             isCatalogRefreshing = data.isCatalogRefreshing,
             persistedTreeUri = attachment?.treeUri,
@@ -234,6 +242,19 @@ class MainViewModel(
         loadCatalog()
         refreshManagedInstalls()
         observeVisualSettings()
+        checkForAppUpdate()
+    }
+
+    fun checkForAppUpdate() {
+        viewModelScope.launch {
+            appUpdateNotice.value = appUpdateRepository.checkForUpdate()
+        }
+    }
+
+    fun dismissAppUpdate() {
+        val notice = appUpdateNotice.value ?: return
+        appUpdateRepository.dismiss(notice)
+        appUpdateNotice.value = null
     }
 
     fun attachTree(uri: Uri, grantFlags: Int) {
@@ -459,6 +480,30 @@ class MainViewModel(
         }
     }
 
+    fun importArchive(archiveUri: Uri) {
+        val treeUri = uiState.value.persistedTreeUri ?: return
+        if (!modOperationMutex.tryLock()) return
+        viewModelScope.launch {
+            try {
+                operation.value = OperationState.Running("Preparing local mod import")
+                operation.value = when (val result = installer.importArchive(treeUri, archiveUri) { progress ->
+                    operation.value = OperationState.Running(progress.message, progress = progress.fraction)
+                }) {
+                    is ArchiveImportResult.Imported -> {
+                        refreshLocalMods()
+                        refreshValidation()
+                        val count = result.folderNames.size
+                        val mods = if (count == 1) "${result.folderNames.single()} imported" else "$count mods imported"
+                        OperationState.Done("$mods. Imported mods do not receive automatic updates.")
+                    }
+                    is ArchiveImportResult.Failed -> OperationState.Error(result.message)
+                }
+            } finally {
+                finishModOperation()
+            }
+        }
+    }
+
     fun setLocalModEnabled(folderName: String, enabled: Boolean) {
         mutateLocalMods(listOf(folderName), enabled)
     }
@@ -559,6 +604,27 @@ class MainViewModel(
         refreshCatalogInBackground()
     }
 
+    fun refreshCatalogModDetails(modId: String, selectedVersion: String) {
+        val pendingRefresh = catalogRefreshJob?.takeIf { it.isActive }
+        catalogRefreshJob = viewModelScope.launch {
+            try {
+                pendingRefresh?.join()
+                val current = catalogMods.value.firstOrNull { it.id == modId } ?: return@launch
+                catalogRefreshing.value = true
+                runCatchingCancellable {
+                    catalogRepository.refreshModDetails(current, selectedVersion)
+                }.onSuccess(::upsertCatalogMod)
+                    .onFailure { error ->
+                        operation.value = OperationState.Error(
+                            error.message ?: "Could not refresh mod details.",
+                        )
+                    }
+            } finally {
+                catalogRefreshing.value = false
+            }
+        }
+    }
+
     fun refreshCatalogIfStale() {
         if (catalogRepository.isCacheStale()) refreshCatalogInBackground()
     }
@@ -623,9 +689,60 @@ class MainViewModel(
         val current = catalogMods.value.firstOrNull { it.id == modId } ?: return
         if (!hydratedModIds.add(modId)) return
         viewModelScope.launch {
-            runCatchingCancellable { catalogRepository.hydrateMod(current) }
-                .onSuccess(::upsertCatalogMod)
-                .onFailure { hydratedModIds.remove(modId) }
+            try {
+                val latestVersion = current.versions.firstOrNull() ?: return@launch
+                val cached = catalogRepository.readCachedVersionReadme(current, latestVersion.versionNumber)
+                if (cached != null) updateCatalogReadme(modId, latestVersion.versionNumber, cached)
+                if (cached?.isFresh == true) return@launch
+
+                runCatchingCancellable {
+                    catalogRepository.loadVersionReadme(
+                        current,
+                        latestVersion.versionNumber,
+                        forceRefresh = cached != null,
+                    )
+                }.onSuccess { result -> updateCatalogReadme(modId, latestVersion.versionNumber, result) }
+            } finally {
+                hydratedModIds.remove(modId)
+            }
+        }
+    }
+
+    fun hydrateCatalogVersion(modId: String, versionNumber: String) {
+        val current = catalogMods.value.firstOrNull { it.id == modId } ?: return
+        if (current.versions.none { it.versionNumber == versionNumber }) return
+        val requestKey = "$modId@$versionNumber"
+        if (!hydratingReadmeVersions.add(requestKey)) return
+        viewModelScope.launch {
+            try {
+                val cached = catalogRepository.readCachedVersionReadme(current, versionNumber)
+                if (cached != null) updateCatalogReadme(modId, versionNumber, cached)
+                if (cached?.isFresh == true) return@launch
+
+                runCatchingCancellable {
+                    catalogRepository.loadVersionReadme(
+                        current,
+                        versionNumber,
+                        forceRefresh = cached != null,
+                    )
+                }.onSuccess { result -> updateCatalogReadme(modId, versionNumber, result) }
+            } finally {
+                hydratingReadmeVersions.remove(requestKey)
+            }
+        }
+    }
+
+    private fun updateCatalogReadme(modId: String, versionNumber: String, result: CatalogReadmeResult) {
+        catalogMods.value = catalogMods.value.map { mod ->
+            if (mod.id != modId) mod else mod.copy(
+                versions = mod.versions.map { version ->
+                    if (version.versionNumber != versionNumber) version else version.copy(
+                        readme = result.markdown,
+                        readmeLoaded = true,
+                        hasFullReadme = result.available,
+                    )
+                },
+            )
         }
     }
 
@@ -671,7 +788,22 @@ class MainViewModel(
     }
 
     private fun upsertCatalogMod(mod: CatalogMod) {
-        catalogMods.value = catalogMods.value.map { if (it.id == mod.id) mod else it }
+        catalogMods.value = catalogMods.value.map { existing ->
+            if (existing.id != mod.id) return@map existing
+            val existingVersions = existing.versions.associateBy(CatalogVersion::versionNumber)
+            mod.copy(
+                versions = mod.versions.map { incoming ->
+                    val cachedReadme = existingVersions[incoming.versionNumber]
+                    if (!incoming.readmeLoaded && cachedReadme?.readmeLoaded == true) {
+                        incoming.copy(
+                            readme = cachedReadme.readme,
+                            readmeLoaded = true,
+                            hasFullReadme = cachedReadme.hasFullReadme,
+                        )
+                    } else incoming
+                },
+            )
+        }
     }
 
     private fun observeVisualSettings() {
@@ -690,10 +822,11 @@ class MainViewModel(
         private val localModRepository: LocalModRepository,
         private val visualSettingsRepository: VisualSettingsRepository,
         private val installer: ModInstaller,
+        private val appUpdateRepository: AppUpdateRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return MainViewModel(repository, lmmBuildDetector, catalogRepository, manifestRepository, localModRepository, visualSettingsRepository, installer) as T
+            return MainViewModel(repository, lmmBuildDetector, catalogRepository, manifestRepository, localModRepository, visualSettingsRepository, installer, appUpdateRepository) as T
         }
     }
 }

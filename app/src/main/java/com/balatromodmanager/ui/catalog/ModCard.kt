@@ -1,8 +1,10 @@
 package com.balatromodmanager.ui.catalog
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -20,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.SystemUpdateAlt
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -31,8 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,6 +45,7 @@ import com.balatromodmanager.OperationState
 import com.balatromodmanager.catalog.CatalogMod
 import com.balatromodmanager.domain.ModPrimaryAction
 import com.balatromodmanager.domain.resolveModPrimaryAction
+import com.balatromodmanager.settings.CatalogCardSize
 import com.balatromodmanager.shortDescription
 import com.balatromodmanager.ui.theme.BmmColor
 
@@ -55,6 +59,8 @@ internal fun ModCard(
     operation: OperationState.Running?,
     busy: Boolean,
     localToggleBusy: Boolean,
+    cardSize: CatalogCardSize = CatalogCardSize.MEDIUM,
+    openEnabled: Boolean = true,
     onOpen: () -> Unit,
     onInstall: () -> Unit,
     onToggleEnabled: () -> Unit,
@@ -63,127 +69,202 @@ internal fun ModCard(
     val haptic = LocalHapticFeedback.current
     val supported = mod.supportsAutomaticInstall
     val (base, stripe) = desktopCardColors(mod.title, BmmColor.darkMode)
+    val cardShape = RoundedCornerShape(4.dp)
     val action = resolveModPrimaryAction(installed, hasUpdate, canGetOfficial)
-    val compactActionLabel = when (action) {
-        ModPrimaryAction.GetOfficial -> "Official"
-        else -> action.label
-    }
+    val compact = cardSize == CatalogCardSize.SMALL
 
     Card(
-        modifier = Modifier.clickable {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            onOpen()
-        },
-        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .border(1.dp, stripe, cardShape)
+            .clickable(enabled = openEnabled) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onOpen()
+            },
+        shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .background(base, RoundedCornerShape(8.dp))
-                .drawBehind {
-                    drawRect(base)
-                    val stripeWidth = 8.dp.toPx()
-                    var x = -size.height
-                    while (x < size.width + size.height) {
-                        drawLine(stripe, Offset(x, size.height), Offset(x + size.height, 0f), stripeWidth)
-                        x += stripeWidth * 2f
-                    }
-                }
-        ) {
-            Column(Modifier.padding(9.dp)) {
-                ModThumbnail(mod, Modifier.fillMaxWidth().aspectRatio(1.72f))
-                Spacer(Modifier.height(7.dp))
-                Text(
-                    text = mod.title,
-                    modifier = Modifier.height(20.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = BmmColor.Gold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = mod.shortDescription(),
-                    modifier = Modifier.height(45.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = BmmColor.Cream,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        BoxWithConstraints(Modifier.fillMaxWidth().background(base, cardShape)) {
+            val cardWidth = maxWidth
+            val horizontal = cardSize == CatalogCardSize.LARGE ||
+                (cardSize == CatalogCardSize.MEDIUM && cardWidth >= 300.dp)
+            if (horizontal) {
+                val imageSize = (cardWidth * 0.34f).coerceAtLeast(124.dp).coerceAtMost(160.dp)
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(9.dp).height(imageSize),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Top,
                 ) {
-                    if (enabled != null) {
-                        Button(
-                            onClick = {
+                    ModThumbnail(mod, Modifier.size(imageSize).aspectRatio(1f).clip(RoundedCornerShape(5.dp)))
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        ModCardText(mod, compact = false, horizontal = true)
+                        Spacer(Modifier.weight(1f))
+                        ModCardActions(
+                            action = action,
+                            operation = operation,
+                            installed = installed,
+                            enabled = enabled,
+                            busy = busy,
+                            localToggleBusy = localToggleBusy,
+                            supported = supported,
+                            compact = false,
+                            onToggleEnabled = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onToggleEnabled()
                             },
-                            enabled = !busy || localToggleBusy,
-                            modifier = Modifier.width(38.dp).height(32.dp),
-                            shape = RoundedCornerShape(4.dp),
-                            contentPadding = PaddingValues(0.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (enabled) BmmColor.GreenStrong else BmmColor.Neutral,
-                                contentColor = Color.White,
-                            ),
-                        ) {
-                            Text(if (enabled) "ON" else "OFF", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onInstall()
-                        },
-                        enabled = !busy && supported && action != ModPrimaryAction.Installed && operation == null,
-                        modifier = Modifier.weight(1f).height(32.dp),
-                        shape = RoundedCornerShape(4.dp),
-                        contentPadding = if (operation == null) PaddingValues(horizontal = 6.dp) else PaddingValues(0.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BmmColor.Green,
-                            contentColor = Color.White,
-                            disabledContainerColor = if (operation != null) BmmColor.Green.copy(alpha = 0.58f) else BmmColor.Neutral,
-                            disabledContentColor = Color.White.copy(alpha = 0.82f),
-                        ),
-                    ) {
-                        if (operation != null) {
-                            ModOperationProgress(operation)
-                        } else {
-                            Icon(
-                                imageVector = if (action == ModPrimaryAction.Update) {
-                                    Icons.Filled.SystemUpdateAlt
-                                } else {
-                                    Icons.Filled.Download
-                                },
-                                contentDescription = null,
-                                modifier = Modifier.size(15.dp),
-                            )
-                            Spacer(Modifier.width(3.dp))
-                            Text(compactActionLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                    if (installed) {
-                        Button(
-                            onClick = {
+                            onInstall = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onInstall()
+                            },
+                            onRemove = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onRemove()
                             },
-                            enabled = !busy,
-                            modifier = Modifier.width(38.dp).height(32.dp),
-                            shape = RoundedCornerShape(4.dp),
-                            contentPadding = PaddingValues(0.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = BmmColor.Danger,
-                                contentColor = Color.White
-                            ),
-                        ) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Remove", modifier = Modifier.size(16.dp))
-                        }
+                        )
                     }
                 }
+            } else {
+                Column(Modifier.fillMaxWidth().padding(if (compact) 5.dp else 8.dp)) {
+                    ModThumbnail(mod, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(5.dp)))
+                    Spacer(Modifier.height(if (compact) 4.dp else 7.dp))
+                    ModCardText(mod, compact = compact, horizontal = false)
+                    Spacer(Modifier.height(3.dp))
+                    ModCardActions(
+                        action = action,
+                        operation = operation,
+                        installed = installed,
+                        enabled = enabled,
+                        busy = busy,
+                        localToggleBusy = localToggleBusy,
+                        supported = supported,
+                        compact = compact,
+                        onToggleEnabled = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleEnabled()
+                        },
+                        onInstall = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onInstall()
+                        },
+                        onRemove = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onRemove()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModCardText(mod: CatalogMod, compact: Boolean, horizontal: Boolean) {
+    Text(
+        text = mod.title,
+        modifier = Modifier.fillMaxWidth(),
+        style = if (compact) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleMedium,
+        color = BmmColor.Gold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+    Text(
+        text = mod.shortDescription(),
+        modifier = if (horizontal) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().height(if (compact) 34.dp else 44.dp),
+        style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+        color = BmmColor.Cream,
+        maxLines = if (horizontal) 2 else if (compact) 2 else 3,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun ModCardActions(
+    action: ModPrimaryAction,
+    operation: OperationState.Running?,
+    installed: Boolean,
+    enabled: Boolean?,
+    busy: Boolean,
+    localToggleBusy: Boolean,
+    supported: Boolean,
+    compact: Boolean,
+    onToggleEnabled: () -> Unit,
+    onInstall: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (enabled != null) {
+            Button(
+                onClick = onToggleEnabled,
+                enabled = !busy || localToggleBusy,
+                modifier = Modifier.width(if (compact) 24.dp else 40.dp).height(32.dp),
+                shape = RoundedCornerShape(4.dp),
+                contentPadding = PaddingValues(0.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (enabled) BmmColor.GreenStrong else BmmColor.Neutral,
+                    contentColor = Color.White,
+                ),
+            ) {
+                if (compact) Icon(Icons.Filled.PowerSettingsNew, contentDescription = if (enabled) "Disable" else "Enable", modifier = Modifier.size(15.dp))
+                else Text(if (enabled) "ON" else "OFF", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Button(
+            onClick = onInstall,
+            enabled = !busy && supported && action != ModPrimaryAction.Installed && operation == null,
+            modifier = Modifier.weight(1f).height(32.dp),
+            shape = RoundedCornerShape(4.dp),
+            contentPadding = PaddingValues(horizontal = if (compact) 0.dp else 6.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BmmColor.Green,
+                contentColor = Color.White,
+                disabledContainerColor = if (operation != null) BmmColor.Green.copy(alpha = 0.8f) else BmmColor.Neutral,
+                disabledContentColor = Color.White.copy(alpha = 0.82f),
+            ),
+        ) {
+            if (operation != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    ModOperationProgress(operation)
+                    if (!compact) {
+                        Text(
+                            operation.message,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            } else {
+                Icon(
+                    imageVector = if (action == ModPrimaryAction.Update) Icons.Filled.SystemUpdateAlt else Icons.Filled.Download,
+                    contentDescription = if (compact) action.label else null,
+                    modifier = Modifier.size(15.dp),
+                )
+                if (!compact) {
+                    Spacer(Modifier.width(4.dp))
+                    Text(action.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        if (installed) {
+            Button(
+                onClick = onRemove,
+                enabled = !busy,
+                modifier = Modifier.width(if (compact) 24.dp else 36.dp).height(32.dp),
+                shape = RoundedCornerShape(4.dp),
+                contentPadding = PaddingValues(0.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Danger, contentColor = Color.White),
+            ) {
+                Icon(Icons.Filled.Delete, contentDescription = "Remove", modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -193,7 +274,7 @@ internal fun ModCard(
 internal fun ModOperationProgress(operation: OperationState.Running) {
     val progress = operation.progress?.coerceIn(0f, 1f)?.takeIf { it > 0f }
     Box(
-        modifier = Modifier.fillMaxSize().background(BmmColor.GreenStrong),
+        modifier = Modifier.size(20.dp),
         contentAlignment = Alignment.Center,
     ) {
         if (progress == null) {

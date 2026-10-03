@@ -24,8 +24,8 @@ android {
         applicationId = "com.balatromodmanager"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.0-beta.3"
+        versionCode = 4
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -67,6 +67,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -86,8 +87,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.coil.compose)
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.30.0")
-    implementation("org.jsoup:jsoup:1.20.1")
-
+    implementation("com.mikepenz:multiplatform-markdown-renderer-coil2:0.30.0")
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)

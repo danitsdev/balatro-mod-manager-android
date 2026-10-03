@@ -25,30 +25,8 @@ class LocalModDetectionPolicyTest {
     }
 
     @Test
-    fun unmanagedFoldersNeedDesktopStyleModEvidence() {
-        assertFalse(hasEvidence("assets", setOf("cards.png")))
-        assertFalse(hasEvidence("native-library", setOf("nativefs.lua")))
-        assertTrue(hasEvidence("PatchMod", setOf("lovely.toml")))
-        assertTrue(hasEvidence("smods-1.0.0", setOf("loader.lua")))
-        assertTrue(hasEvidence("Anything", emptySet(), managed = true))
-        assertTrue(
-            LocalModDetectionPolicy.hasModEvidence(
-                folderName = "ManualMod",
-                topLevelNames = setOf("main.lua"),
-                metadata = LocalModMetadata(declaredId = "manual_mod"),
-                managed = false,
-            ),
-        )
+    fun nonInfrastructureFoldersStayVisibleWithoutCatalogMetadata() {
+        listOf("assets", "native-library", "PatchMod", "ManualMod", "unknown-package")
+            .forEach { name -> assertFalse(name, LocalModDetectionPolicy.shouldSkipFolder(name)) }
     }
-
-    private fun hasEvidence(
-        folderName: String,
-        files: Set<String>,
-        managed: Boolean = false,
-    ) = LocalModDetectionPolicy.hasModEvidence(
-        folderName = folderName,
-        topLevelNames = files,
-        metadata = LocalModMetadata(),
-        managed = managed,
-    )
 }

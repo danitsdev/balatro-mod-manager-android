@@ -45,16 +45,10 @@ private val licenseCredits = listOf(
         url = "https://github.com/skyline69/balatro-mod-manager",
     ),
     LicenseCredit(
-        name = "Balatro Mod Index",
-        license = "MIT",
-        description = "Community mod catalog used for metadata and download sources.",
-        url = "https://github.com/skyline69/balatro-mod-index",
-    ),
-    LicenseCredit(
-        name = "BMI API",
+        name = "Thunderstore Balatro API",
         license = "Online service",
-        description = "Provides the catalog, thumbnails, descriptions and download information.",
-        url = "https://api-bmi.dasguney.com",
+        description = "Provides the community catalog, package metadata and mod downloads.",
+        url = "https://thunderstore.io/c/balatro/",
     ),
     LicenseCredit(
         name = "m6x11plus",
@@ -73,12 +67,6 @@ private val licenseCredits = listOf(
         license = "Apache-2.0",
         description = "Native rendering for mod descriptions.",
         url = "https://github.com/mikepenz/multiplatform-markdown-renderer",
-    ),
-    LicenseCredit(
-        name = "jsoup",
-        license = "MIT",
-        description = "HTML parsing used when preparing catalog descriptions.",
-        url = "https://github.com/jhy/jsoup",
     ),
     LicenseCredit(
         name = "AndroidX & Jetpack Compose",

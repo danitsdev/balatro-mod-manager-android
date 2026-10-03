@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -68,12 +69,13 @@ fun InstalledScreen(
     onInstallAll: (List<CatalogMod>) -> Unit,
     onUninstall: (ManagedInstallManifest) -> Unit,
     onRemoveLocalMod: (String) -> Unit,
+    onPickArchive: () -> Unit,
     onSetLocalModEnabled: (String, Boolean) -> Unit,
     onSetLocalModsEnabled: (List<String>, Boolean) -> Unit,
 ) {
     val validation = state.validation as? TreeValidation.Valid ?: return
     val haptic = LocalHapticFeedback.current
-    val localMods = state.localMods.filterNot { it.folderName.equals("lovely", ignoreCase = true) }
+    val localMods = state.localMods
     val busy = state.operation is OperationState.Running
     val localToggleBusy = (state.operation as? OperationState.Running)?.isLocalToggle == true
     var installedQuery by rememberSaveable { mutableStateOf("") }
@@ -106,20 +108,18 @@ fun InstalledScreen(
         val catalog = catalogMatch ?: CatalogMod(
                 id = local.declaredId.ifBlank { local.folderName },
                 title = local.title.ifBlank { local.folderName },
-                author = local.author.ifBlank { "Unknown" },
+                author = local.author.ifBlank { "Local mod" },
                 categories = emptyList(),
                 repo = "",
                 downloadUrl = "",
                 folderName = local.folderName,
                 version = local.version,
                 requiresSteamodded = false,
-                requiresTalisman = false,
-                automaticVersionCheck = false,
+                requiresAmulet = false,
                 lastUpdated = 0,
                 downloadsTotal = 0,
-                downloadsToday = 0,
                 thumbnailUrl = "",
-                summary = "Mod folder: ${local.folderName}",
+                summary = "Installed locally. Updates are manual.",
                 description = "No online description available."
             )
         InstalledCardItem(local, catalog, catalogMatch != null)
@@ -131,7 +131,7 @@ fun InstalledScreen(
         modifier = Modifier.fillMaxSize().padding(padding),
     ) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(visualSettings.cardMinWidthDp.dp),
+        columns = GridCells.Fixed(visualSettings.cardSize.columnsPerRow),
         modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -159,6 +159,20 @@ fun InstalledScreen(
                         unfocusedTextColor = BmmColor.Cream,
                     ),
                 )
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onPickArchive()
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green),
+                ) {
+                    Icon(Icons.Filled.Folder, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Import mod / modpack")
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = {
@@ -231,10 +245,12 @@ fun InstalledScreen(
                     enabled = local.enabled,
                     hasUpdate = hasUpdate,
                     canGetOfficial = manifest == null && item.hasCatalogMatch,
+                    cardSize = visualSettings.cardSize,
                     operation = operation,
                     busy = busy,
                     localToggleBusy = localToggleBusy,
                     onOpen = { onOpenMod(catalog) },
+                    openEnabled = item.hasCatalogMatch,
                     onInstall = { onInstall(catalog) },
                     onToggleEnabled = { onSetLocalModEnabled(local.folderName, !local.enabled) },
                     onRemove = {
@@ -264,10 +280,12 @@ fun InstalledScreen(
                     enabled = local.enabled,
                     hasUpdate = hasUpdate,
                     canGetOfficial = manifest == null && item.hasCatalogMatch,
+                    cardSize = visualSettings.cardSize,
                     operation = operation,
                     busy = busy,
                     localToggleBusy = localToggleBusy,
                     onOpen = { onOpenMod(catalog) },
+                    openEnabled = item.hasCatalogMatch,
                     onInstall = { onInstall(catalog) },
                     onToggleEnabled = { onSetLocalModEnabled(local.folderName, !local.enabled) },
                     onRemove = {

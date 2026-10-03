@@ -18,7 +18,6 @@ data class LocalModStatus(
 
 class LocalModRepository(
     private val appContext: Context,
-    private val managedInstallRepository: ManagedInstallRepository? = null,
 ) {
     private val steamoddedBlacklist = SteamoddedBlacklistStore(appContext)
 
@@ -29,17 +28,13 @@ class LocalModRepository(
         val modsDir = resolveModsDir(treeUri)
             ?: throw IllegalStateException("Could not open ASET/Mods.")
         val blacklistedFolders = steamoddedBlacklist.read(modsDir)
-        val managedFolders = managedInstallRepository
-            ?.list()
-            ?.mapTo(hashSetOf()) { it.folderName.lowercase() }
-            .orEmpty()
         val candidates = folderNames?.asSequence()
             ?.mapNotNull { folderName -> modsDir.findFile(folderName) }
             ?: modsDir.listFiles().asSequence()
         candidates
             .filter { it.isDirectory }
             .filterNot { LocalModDetectionPolicy.shouldSkipFolder(it.name.orEmpty()) }
-            .mapNotNull { modDir -> readStatus(modDir, blacklistedFolders, managedFolders) }
+            .map { modDir -> readStatus(modDir, blacklistedFolders) }
             .sortedWith(compareBy<LocalModStatus> { !it.enabled }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.folderName })
             .toList()
     }
@@ -115,19 +110,10 @@ class LocalModRepository(
     private fun readStatus(
         modDir: DocumentFile,
         blacklistedFolders: Set<String>,
-        managedFolders: Set<String>,
-    ): LocalModStatus? {
+    ): LocalModStatus {
         val folderName = modDir.name.orEmpty()
         val scan = scanModDirectory(modDir)
         val metadata = readMetadata(scan.topLevelEntries)
-        val topLevelNames = scan.topLevelEntries.mapTo(hashSetOf()) { it.name.orEmpty() }
-        if (!LocalModDetectionPolicy.hasModEvidence(
-                folderName = folderName,
-                topLevelNames = topLevelNames,
-                metadata = metadata,
-                managed = folderName.lowercase() in managedFolders,
-            )
-        ) return null
         return LocalModStatus(
             folderName = folderName,
             enabled = !scan.hasLovelyIgnore && folderName.lowercase() !in blacklistedFolders,
@@ -254,35 +240,6 @@ internal object LocalModDetectionPolicy {
             lower == "__macosx"
     }
 
-    fun hasModEvidence(
-        folderName: String,
-        topLevelNames: Set<String>,
-        metadata: LocalModMetadata,
-        managed: Boolean,
-    ): Boolean {
-        if (managed || metadata.hasAnyValue) return true
-
-        val names = topLevelNames.mapTo(hashSetOf()) { it.lowercase() }
-        if ("lovely.toml" in names) return true
-
-        val lowerFolder = folderName.lowercase()
-        val steamoddedFolder = lowerFolder == "steamodded" ||
-            lowerFolder == "smods" ||
-            lowerFolder == "smods_main" ||
-            lowerFolder.startsWith("smods-") ||
-            lowerFolder.contains("steamodded")
-        if (steamoddedFolder && names.any { it in STEAMODDED_INDICATORS }) return true
-
-        return "mods" in names && names.any { it.equals("readme.md", ignoreCase = true) }
-    }
-
-    private val STEAMODDED_INDICATORS = setOf(
-        "api.lua",
-        "smods.lua",
-        "loader.lua",
-        "init.lua",
-        "manifest.json",
-    )
 }
 
 private fun DocumentFile.deleteRecursivelySaf(): Boolean {

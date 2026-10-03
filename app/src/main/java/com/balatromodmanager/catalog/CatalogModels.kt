@@ -12,53 +12,59 @@ data class CatalogSnapshot(
 )
 
 @Serializable
-data class BmiModsPage(
-    val items: List<BmiModItem> = emptyList(),
-    @SerialName("next_cursor")
-    val nextCursor: String? = null,
+data class ThunderstorePackage(
+    val name: String = "",
+    @SerialName("full_name")
+    val fullName: String = "",
+    val owner: String = "",
+    @SerialName("package_url")
+    val packageUrl: String = "",
+    @SerialName("date_updated")
+    val dateUpdated: String = "",
+    @SerialName("uuid4")
+    val uuid: String = "",
+    @SerialName("is_deprecated")
+    val isDeprecated: Boolean = false,
+    val categories: List<String> = emptyList(),
+    val versions: List<ThunderstorePackageVersion> = emptyList(),
 )
 
 @Serializable
-data class BmiModItem(
-    val id: String? = null,
-    @SerialName("dir_name")
-    val dirName: String? = null,
-    val name: String? = null,
-    val author: String? = null,
-    val version: String? = null,
-    val summary: String? = null,
-    val description: String? = null,
-    @SerialName("description_html")
-    val descriptionHtml: String? = null,
-    val homepage: String? = null,
-    val repo: String? = null,
-    @SerialName("download_url")
-    val downloadUrl: String? = null,
-    @SerialName("folder_name")
-    val folderName: String? = null,
-    @SerialName("updated_at")
-    val updatedAt: Long? = 0,
-    @SerialName("thumbnail_url")
-    val thumbnailUrl: String? = null,
-    val categories: List<String>? = emptyList(),
-    @SerialName("requires_steamodded")
-    val requiresSteamodded: Boolean? = false,
-    @SerialName("requires_talisman")
-    val requiresTalisman: Boolean? = false,
-    val downloads: CatalogDownloads? = CatalogDownloads(),
-)
-
-@Serializable
-data class BmiDownloadResponse(
+data class ThunderstorePackageVersion(
+    val description: String = "",
+    val icon: String = "",
+    @SerialName("version_number")
+    val versionNumber: String = "",
+    val dependencies: List<String> = emptyList(),
     @SerialName("download_url")
     val downloadUrl: String = "",
-    val url: String = "",
+    val downloads: Long = 0,
+    @SerialName("date_created")
+    val dateCreated: String = "",
+    @SerialName("file_size")
+    val fileSize: Long = 0,
+    @SerialName("website_url")
+    val websiteUrl: String = "",
 )
 
 @Serializable
-data class CatalogDownloads(
-    val total: Long = 0,
-    val today: Long = 0,
+data class CatalogVersion(
+    val versionNumber: String = "",
+    val description: String = "",
+    val downloadUrl: String = "",
+    val dependencies: List<String> = emptyList(),
+    val dateCreated: String = "",
+    val downloads: Long = 0,
+    val fileSize: Long = 0,
+    val readme: String = "",
+    val readmeLoaded: Boolean = false,
+    val hasFullReadme: Boolean = false,
+)
+
+data class CatalogReadmeResult(
+    val markdown: String,
+    val available: Boolean,
+    val isFresh: Boolean = true,
 )
 
 @Serializable
@@ -72,21 +78,22 @@ data class CatalogMod(
     val folderName: String = "",
     val version: String = "",
     val requiresSteamodded: Boolean = false,
-    val requiresTalisman: Boolean = false,
-    val automaticVersionCheck: Boolean = false,
+    val requiresAmulet: Boolean = false,
+    val requiredPackages: List<String> = emptyList(),
     val lastUpdated: Long = 0,
     val downloadsTotal: Long = 0,
-    val downloadsToday: Long = 0,
     val thumbnailUrl: String = "",
     val summary: String = "",
     val description: String = "",
+    val packageUuid: String = "",
+    val versions: List<CatalogVersion> = emptyList(),
+    val requestedVersionNumber: String? = null,
 ) {
     val installFolder: String
         get() = folderName.ifBlank { title }.sanitizeFolderName()
 
     val supportsAutomaticInstall: Boolean
         get() {
-            if (downloadUrl.startsWith("bmi://", ignoreCase = true)) return true
             if (!downloadUrl.startsWith("https://", ignoreCase = true)) return false
 
             // GitHub/codeload archive URLs commonly end in a tag or commit rather
@@ -104,6 +111,23 @@ data class CatalogMod(
             append(description.take(300))
         }
 }
+
+fun CatalogMod.forVersion(version: CatalogVersion): CatalogMod = copy(
+    version = version.versionNumber,
+    downloadUrl = version.downloadUrl,
+    requiredPackages = version.dependencies,
+    requiresSteamodded = version.dependencies.any { it.isSteamoddedDependency() },
+    requiresAmulet = version.dependencies.any { it.isAmuletDependency() },
+    requestedVersionNumber = version.versionNumber,
+)
+
+private fun String.isSteamoddedDependency(): Boolean =
+    startsWith("Steamodded-Steamodded-", ignoreCase = true) ||
+        startsWith("Steamopollys-Steamodded-", ignoreCase = true)
+
+private fun String.isAmuletDependency(): Boolean =
+    startsWith("just_frostice482-Amulet-", ignoreCase = true) ||
+        startsWith("MathIsFun0-Talisman-", ignoreCase = true)
 
 private val UnsupportedArchiveSuffixes = listOf(
     ".7z",
@@ -125,6 +149,8 @@ internal fun List<CatalogMod>.deduplicatedCatalog(): List<CatalogMod> {
 
 private fun preferredDuplicate(existing: CatalogMod, incoming: CatalogMod): CatalogMod {
     return when {
+        incoming.isCanonicalSteamoddedPackage() != existing.isCanonicalSteamoddedPackage() ->
+            if (incoming.isCanonicalSteamoddedPackage()) incoming else existing
         incoming.downloadsTotal != existing.downloadsTotal ->
             if (incoming.downloadsTotal > existing.downloadsTotal) incoming else existing
         incoming.hasCatalogThumbnail() != existing.hasCatalogThumbnail() ->
@@ -134,6 +160,9 @@ private fun preferredDuplicate(existing: CatalogMod, incoming: CatalogMod): Cata
         else -> incoming
     }
 }
+
+private fun CatalogMod.isCanonicalSteamoddedPackage(): Boolean =
+    author.equals("Steamodded", ignoreCase = true) && title.equals("Steamodded", ignoreCase = true)
 
 private fun CatalogMod.hasCatalogThumbnail(): Boolean = thumbnailUrl.trim().isNotEmpty()
 

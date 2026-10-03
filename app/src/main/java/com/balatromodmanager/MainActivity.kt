@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -59,6 +60,7 @@ import com.balatromodmanager.installer.ManagedInstallRepository
 import com.balatromodmanager.installer.ModInstaller
 import com.balatromodmanager.settings.VisualSettingsRepository
 import com.balatromodmanager.ui.DependencySheet
+import com.balatromodmanager.ui.AppUpdateBanner
 import com.balatromodmanager.ui.LicensesScreen
 import com.balatromodmanager.ui.LoadingScreen
 import com.balatromodmanager.ui.OnboardingScreen
@@ -74,7 +76,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val repository = AndroidGameTreeRepository(applicationContext, applicationContext.settingsDataStore)
         val manifestRepository = ManagedInstallRepository(applicationContext)
-        val localModRepository = LocalModRepository(applicationContext, manifestRepository)
+        val localModRepository = LocalModRepository(applicationContext)
         val visualSettingsRepository = VisualSettingsRepository(applicationContext.settingsDataStore)
 
         setContent {
@@ -87,6 +89,7 @@ class MainActivity : ComponentActivity() {
                     localModRepository = localModRepository,
                     visualSettingsRepository = visualSettingsRepository,
                     installer = ModInstaller(applicationContext, manifestRepository),
+                    appUpdateRepository = AppUpdateRepository(applicationContext, BuildConfig.VERSION_NAME),
                 ),
             )
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -104,12 +107,19 @@ private enum class AppDestination(val label: String, val icon: ImageVector) {
 @Composable
 private fun AppScreen(viewModel: MainViewModel, uiState: MainUiState) {
     val visualSettings = uiState.visualSettings
+    val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) viewModel.attachTree(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
     }
+    val archivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::importArchive)
+    }
 
     LaunchedEffect(Unit) { viewModel.detectLmmBuilds(); viewModel.refreshValidation() }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshCatalogIfStale() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshCatalogIfStale()
+        viewModel.checkForAppUpdate()
+    }
     LaunchedEffect(uiState.persistedTreeUri, uiState.validation) {
         if (uiState.validation is TreeValidation.Valid) viewModel.refreshLocalMods()
     }
@@ -134,9 +144,11 @@ private fun AppScreen(viewModel: MainViewModel, uiState: MainUiState) {
                 onSetLocalModEnabled = viewModel::setLocalModEnabled,
                 onSetLocalModsEnabled = viewModel::setLocalModsEnabled,
                 onRefreshCatalog = viewModel::refreshCatalog,
+                onRefreshCatalogModDetails = viewModel::refreshCatalogModDetails,
                 onEnsureCatalog = viewModel::ensureCatalogAvailable,
                 onClearCatalogCache = viewModel::clearCatalogCache,
                 onHydrateCatalogMod = viewModel::hydrateCatalogMod,
+                onHydrateCatalogVersion = viewModel::hydrateCatalogVersion,
                 onQueryChange = viewModel::setQuery,
                 onCategoryChange = viewModel::setCategory,
                 onSortChange = viewModel::setSortMode,
@@ -146,13 +158,17 @@ private fun AppScreen(viewModel: MainViewModel, uiState: MainUiState) {
                 onInstallAll = viewModel::installAll,
                 onUninstall = viewModel::uninstall,
                 onRemoveLocalMod = viewModel::removeLocalMod,
+                onPickArchive = { archivePicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                 onClearOperation = viewModel::clearOperation,
+                onOpenRelease = { url -> context.openUrl(url) },
+                onDismissAppUpdate = viewModel::dismissAppUpdate,
             )
             else -> OnboardingScreen(
                 validation = uiState.validation,
                 detectedBuilds = uiState.detectedBuilds,
                 onPickFolder = { picker.launch(null) },
                 onPickDetectedBuild = { picker.launch(it.initialUri) },
+                onOpenLmm = { context.openUrl("https://lmm.shorty.systems/") },
             )
         }
     }
@@ -168,9 +184,11 @@ private fun ConnectedShell(
     onSetLocalModEnabled: (String, Boolean) -> Unit,
     onSetLocalModsEnabled: (List<String>, Boolean) -> Unit,
     onRefreshCatalog: () -> Unit,
+    onRefreshCatalogModDetails: (String, String) -> Unit,
     onEnsureCatalog: () -> Unit,
     onClearCatalogCache: () -> Unit,
     onHydrateCatalogMod: (String) -> Unit,
+    onHydrateCatalogVersion: (String, String) -> Unit,
     onQueryChange: (String) -> Unit,
     onCategoryChange: (String?) -> Unit,
     onSortChange: (CatalogSortMode) -> Unit,
@@ -180,14 +198,28 @@ private fun ConnectedShell(
     onInstallAll: (List<CatalogMod>) -> Unit,
     onUninstall: (ManagedInstallManifest) -> Unit,
     onRemoveLocalMod: (String) -> Unit,
+    onPickArchive: () -> Unit,
     onClearOperation: () -> Unit,
+    onOpenRelease: (String) -> Unit,
+    onDismissAppUpdate: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(AppDestination.Catalog.name) }
     var dependencyPrompt by remember { mutableStateOf<CatalogMod?>(null) }
     var selectedModId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedModOrigin by rememberSaveable { mutableStateOf(AppDestination.Catalog.name) }
+    val detailHistory = remember { mutableListOf<String>() }
     var showLicenses by rememberSaveable { mutableStateOf(false) }
     val destination = AppDestination.valueOf(selected)
+
+    fun backFromModDetails() {
+        val parentModId = detailHistory.removeLastOrNull()
+        if (parentModId != null) {
+            selectedModId = parentModId
+        } else {
+            selectedModId = null
+            selected = selectedModOrigin
+        }
+    }
 
     LaunchedEffect(destination) {
         if (destination == AppDestination.Catalog) onEnsureCatalog()
@@ -195,10 +227,7 @@ private fun ConnectedShell(
     BackHandler(enabled = showLicenses || selectedModId != null || destination != AppDestination.Catalog) {
         when {
             showLicenses -> showLicenses = false
-            selectedModId != null -> {
-                selectedModId = null
-                selected = selectedModOrigin
-            }
+            selectedModId != null -> backFromModDetails()
             destination != AppDestination.Catalog -> selected = AppDestination.Catalog.name
             else -> Unit
         }
@@ -206,14 +235,24 @@ private fun ConnectedShell(
     val validation = state.validation as TreeValidation.Valid
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(state.operation) {
-        val error = state.operation as? OperationState.Error ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(error.message.redactPrivatePaths())
+        val message = when (val operation = state.operation) {
+            is OperationState.Error -> operation.message.redactPrivatePaths()
+            is OperationState.Done -> operation.message
+            else -> return@LaunchedEffect
+        }
+        snackbarHostState.showSnackbar(message)
         onClearOperation()
     }
-    val dependencies = remember(validation.modFolderNames, state.managedInstalls) {
+    val dependencies = remember(validation.modFolderNames, state.managedInstalls, state.localMods) {
         DependencyStatus(
             steamoddedInstalled = validation.hasSteamoddedFolder(),
             amuletInstalled = validation.hasAmuletCompatibleFolder(),
+            lovelyInstalled = true,
+            installedPackageIds = buildSet {
+                state.managedInstalls.mapTo(this) { it.modId }
+                state.localMods.mapNotNullTo(this) { it.declaredId.takeIf { id -> id.isNotBlank() } }
+            },
+            installedFolderNames = validation.modFolderNames.toSet(),
         )
     }
 
@@ -222,6 +261,15 @@ private fun ConnectedShell(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            state.appUpdateNotice?.let { notice ->
+                AppUpdateBanner(
+                    notice = notice,
+                    onOpenRelease = { onOpenRelease(notice.releaseUrl) },
+                    onDismiss = onDismissAppUpdate,
+                )
+            }
+        },
         bottomBar = {
             val haptic = LocalHapticFeedback.current
             NavigationBar(
@@ -256,29 +304,36 @@ private fun ConnectedShell(
                 state = state, padding = padding,
                 onQueryChange = onQueryChange, onCategoryChange = onCategoryChange, onSortChange = onSortChange,
                 onRefreshCatalog = onRefreshCatalog,
-                onHydrateCatalogMod = onHydrateCatalogMod, visualSettings = visualSettings,
+                onRefreshCatalogModDetails = onRefreshCatalogModDetails,
+                onHydrateCatalogMod = onHydrateCatalogMod,
+                onHydrateCatalogVersion = onHydrateCatalogVersion,
+                visualSettings = visualSettings,
                 selectedMod = selectedModId?.let { id -> state.catalogMods.firstOrNull { it.id == id } },
                 onOpenMod = {
+                    detailHistory.clear()
                     selectedModOrigin = AppDestination.Catalog.name
                     selectedModId = it.id
                 },
-                onBackFromMod = {
-                    selectedModId = null
-                    selected = selectedModOrigin
+                onOpenDependency = {
+                    selectedModId?.let(detailHistory::add)
+                    selectedModId = it.id
                 },
-                onInstall = { mod -> if (mod.missingDependencies(dependencies).isEmpty()) onInstall(mod) else dependencyPrompt = mod },
+                onBackFromMod = ::backFromModDetails,
+                onInstall = { mod -> if (mod.missingDependencies(dependencies, state.catalogMods).isEmpty()) onInstall(mod) else dependencyPrompt = mod },
                 onSetLocalModEnabled = onSetLocalModEnabled,
                 onUninstall = onUninstall, onRemoveLocalMod = onRemoveLocalMod, onClearOperation = onClearOperation,
             )
             AppDestination.Installed -> InstalledScreen(
                 state = state, padding = padding, visualSettings = visualSettings, onRefresh = onRefresh,
                 onOpenMod = {
+                    detailHistory.clear()
                     selectedModOrigin = AppDestination.Installed.name
                     selectedModId = it.id
                     selected = AppDestination.Catalog.name
                 },
-                onInstall = { mod -> if (mod.missingDependencies(dependencies).isEmpty()) onInstall(mod) else dependencyPrompt = mod },
+                onInstall = { mod -> if (mod.missingDependencies(dependencies, state.catalogMods).isEmpty()) onInstall(mod) else dependencyPrompt = mod },
                 onInstallAll = onInstallAll, onUninstall = onUninstall, onRemoveLocalMod = onRemoveLocalMod,
+                onPickArchive = onPickArchive,
                 onSetLocalModEnabled = onSetLocalModEnabled, onSetLocalModsEnabled = onSetLocalModsEnabled,
             )
             AppDestination.Settings -> if (showLicenses) {
@@ -302,7 +357,12 @@ private fun ConnectedShell(
             dependencies = dependencies,
             onInstall = onInstall,
             onOpenDependency = { dependency ->
-                selectedModOrigin = if (selectedModId != null) selectedModOrigin else destination.name
+                if (selectedModId != null) {
+                    selectedModId?.let(detailHistory::add)
+                } else {
+                    detailHistory.clear()
+                    selectedModOrigin = destination.name
+                }
                 selectedModId = dependency.id
                 selected = AppDestination.Catalog.name
                 dependencyPrompt = null

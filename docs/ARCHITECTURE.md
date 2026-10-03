@@ -1,62 +1,56 @@
 # Architecture
 
-Balatro Mod Manager is a native Android app built with Kotlin and Jetpack Compose.
-It follows the desktop Balatro Mod Manager behavior where practical, with Android
-Storage Access Framework operations replacing direct filesystem access.
+The app is written in Kotlin and Jetpack Compose. It manages game files through Android's Storage Access Framework (SAF), using the folder permission granted by the user.
 
-## Main Areas
+## Code map
 
-```text
-catalog/      Balatro Mod Index API, cache, search, and deduplication
-domain/       catalog/local matching and update rules
-installer/    local scanning, ZIP validation, install, update, and removal
-settings/     DataStore-backed visual preferences
-storage/      persisted SAF folder access and ASET/Mods validation
-ui/           Compose screens, cards, themes, and backgrounds
-```
+    catalog/      Thunderstore API, cache, search, and deduplication
+    domain/       catalog and local mod matching, update rules
+    installer/    local scanning, archive validation, install, update, removal
+    settings/     DataStore preferences
+    storage/      SAF access and game-folder validation
+    ui/           Compose screens, cards, themes, and backgrounds
 
-`MainViewModel` owns screen state and starts operations. UI components render that
-state and optimistically reflect simple actions such as enable, disable, and
-removal while storage work finishes.
+MainViewModel holds screen state and starts catalog and storage operations. Repositories handle network and file work; Compose screens display the resulting state.
 
 ## Catalog
 
-The app loads its private catalog cache immediately, then refreshes from the
-Balatro Mod Index API when that cache is older than one hour or the user pulls to
-refresh. A first launch without cache loads directly from BMI. The last valid
-response remains available if a later refresh fails. Coil handles cover-image
-memory and disk caching.
+The app loads its cached catalog at startup and refreshes it when it is older than one hour or when the user pulls to refresh. If a refresh fails, the last valid catalog remains available. Cache entries include a schema version so incompatible snapshots are discarded.
 
-Catalog deduplication, search, sorting, matching, and version checks live outside
-the Compose UI so the same rules can be unit tested.
+Catalog cards use the short description from the latest Thunderstore package version. The detail screen loads the full README for the selected version from Thunderstore. If no full README is available, it shows that version's description. The app normalizes common Thunderstore HTML and renders Markdown and README images.
 
-## Storage
+The version list contains package metadata. Before installation, the app refreshes package details and resolves the selected version's download and dependency list against the current Thunderstore record.
 
-The user grants access to the game build folder with Android's document picker.
-The app persists that SAF grant and only operates inside `ASET/Mods`.
+The app filters known packages that cannot be installed or used on the supported mobile build:
 
-Installations are downloaded to private cache, validated as ZIP archives, and then
-copied through SAF. The installer rejects unsafe paths, unsupported entries,
-conflicts, and oversized archives before committing files.
+- r2modman and Gale are desktop mod managers.
+- Lovely is bundled in the supported Lovely Mobile Maker build.
+- MultiplayerAPI and its speedrun add-on require Steam authentication.
+- balatroVS has a Windows-only Thunderstore archive; its Android build is distributed separately.
 
-## Installed Mod States
+These filters use package IDs. Categories are not treated as compatibility data. Lovely remains satisfied when another package lists it as a dependency.
 
-- **Managed:** installed by this app and backed by a private manifest.
-- **Local:** detected in `ASET/Mods` without a matching managed manifest.
-- **Get official:** a local mod matches a catalog entry and can be replaced by that entry.
-- **Update:** a managed mod has a non-empty catalog version different from its manifest version.
+Catalog search, sorting, matching, and version rules live outside the UI. Card size selects a three-, two-, or one-column layout. The default is two columns; wider cards use a horizontal arrangement for their description and actions.
 
-Enable and disable state is read from `.lovelyignore` markers and the Steamodded
-blacklist. A refresh always rescans device storage instead of assuming the last UI
-state is authoritative.
+Dependencies are read from the selected version. The detail screen shows each requested package and version, links packages to their catalog pages, and checks installed mods. GitHub Releases are checked at most once a day; a newer release appears as a dismissible notice.
 
-## Verification
+## Storage and installed mods
 
-Run the complete local check before a pull request:
+The user creates a game build with Lovely Mobile Maker, opens it once, then selects the parent folder containing ASET in the Android document picker. The app keeps that SAF permission and only manages files in ASET/Mods.
 
-```text
-./gradlew testDebugUnitTest lintDebug assembleDebug
-```
+Thunderstore downloads and imported ZIPs pass through the same archive inspection before files are copied into the game folder. Imports can contain one mod or multiple mod folders. A manifest-only modpack cannot be imported because it does not include mod files.
 
-Tests cover catalog behavior, desktop-parity matching, dependency resolution,
-archive safety, local metadata, and storage validation rules.
+The **Installed** screen includes:
+
+- **Managed** mods installed by the app, with a private manifest used for version tracking.
+- **Local** mods found in ASET/Mods without a matching manifest.
+- **Get official** when a local mod matches a Thunderstore package.
+- **Update** when a managed mod has a newer catalog version.
+
+The app reads enablement from .lovelyignore markers and the Steamodded blacklist. Refreshing rescans the game folder. Local and imported mods can be enabled, disabled, and removed, but have no automatic update source.
+
+## Local checks
+
+Run the checks before opening a pull request:
+
+    ./gradlew testDebugUnitTest lintDebug assembleDebug

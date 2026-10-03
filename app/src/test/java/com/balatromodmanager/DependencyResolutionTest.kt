@@ -11,14 +11,14 @@ class DependencyResolutionTest {
             id = "dependent",
             title = "Dependent",
             author = "Author",
-            requiresTalisman = true,
+            requiresAmulet = true,
         )
 
         val missing = mod.missingDependencies(
             DependencyStatus(steamoddedInstalled = true, amuletInstalled = false),
         )
 
-        assertEquals(listOf("Amulet"), missing)
+        assertEquals(listOf("Amulet"), missing.map { it.title })
     }
 
     @Test

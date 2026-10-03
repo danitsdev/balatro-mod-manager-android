@@ -2,9 +2,11 @@ package com.balatromodmanager.installer
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import com.balatromodmanager.catalog.CatalogMod
 import com.balatromodmanager.catalog.ManagedInstallManifest
+import com.balatromodmanager.catalog.sanitizeFolderName
 import com.balatromodmanager.redactPrivatePaths
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -120,6 +122,74 @@ class ModInstaller(
         }
     }
 
+    suspend fun importArchive(
+        treeUri: Uri,
+        archiveUri: Uri,
+        onProgress: suspend (InstallProgress) -> Unit = {},
+    ): ArchiveImportResult = withContext(Dispatchers.IO) {
+        val modsDir = resolveModsDir(treeUri)
+            ?: return@withContext ArchiveImportResult.Failed("ASET/Mods could not be opened with the current folder permission.")
+        if (!modsDir.canWrite()) return@withContext ArchiveImportResult.Failed("ASET/Mods is read-only.")
+
+        val sourceName = archiveUri.displayName()?.substringAfterLast('/')
+            ?: return@withContext ArchiveImportResult.Failed("Could not read the selected file name.")
+        val workDir = File(appContext.cacheDir, "import-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val archive = File(workDir, "selected.zip")
+            onProgress(InstallProgress("Reading $sourceName"))
+            copySelectedArchive(archiveUri, archive)
+            onProgress(InstallProgress("Inspecting archive"))
+            val inspection = runCatching { inspector.inspect(archive) }
+                .getOrElse { error ->
+                    if (error is java.util.zip.ZipException) {
+                        throw IllegalStateException("The selected file is not a valid ZIP archive.")
+                    }
+                    throw error
+                }
+            val units = inspection.importUnits(sourceName)
+            if (units.isEmpty()) throw ArchiveValidationException.EmptyArchive()
+            val names = units.map { it.folderName.lowercase() }
+            if (names.distinct().size != names.size) {
+                throw IllegalStateException("The archive contains folders that map to the same mod name.")
+            }
+            val existingNames = modsDir.listFiles().mapNotNull { it.name?.lowercase() }.toSet()
+            val conflicts = units.map { it.folderName }.filter { it.lowercase() in existingNames }
+            if (conflicts.isNotEmpty()) {
+                throw IllegalStateException(
+                    "${conflicts.joinToString()} already exists in ASET/Mods. Remove or rename it before importing.",
+                )
+            }
+
+            val imported = mutableListOf<String>()
+            try {
+                units.forEachIndexed { index, unit ->
+                    onProgress(InstallProgress("Importing ${unit.folderName}", index.toFloat() / units.size))
+                    commitArchiveToMods(
+                        modsDir = modsDir,
+                        folderName = unit.folderName,
+                        existing = null,
+                        archive = archive,
+                        inspection = unit.inspection,
+                        title = unit.folderName,
+                        preserveDisabled = false,
+                        onProgress = onProgress,
+                    )
+                    imported += unit.folderName
+                }
+            } catch (exception: Exception) {
+                imported.forEach { modsDir.findFile(it)?.deleteTreeSaf() }
+                throw exception
+            }
+            ArchiveImportResult.Imported(units.map { it.folderName })
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (exception: Exception) {
+            ArchiveImportResult.Failed(exception.userFacingImportMessage(sourceName))
+        } finally {
+            workDir.deleteRecursively()
+        }
+    }
+
     private fun resolveModsDir(treeUri: Uri): DocumentFile? {
         val root = DocumentFile.fromTreeUri(appContext, treeUri) ?: return null
         val aset = root.findFile("ASET")?.takeIf { it.isDirectory } ?: return null
@@ -219,6 +289,88 @@ class ModInstaller(
             }
         }
         throw IllegalStateException("The download exceeded the redirect limit.")
+    }
+
+    private suspend fun copySelectedArchive(uri: Uri, target: File) {
+        val input = appContext.contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("Could not open the selected ZIP file.")
+        var copied = 0L
+        BufferedInputStream(input, IO_BUFFER_SIZE).use { source ->
+            BufferedOutputStream(FileOutputStream(target), IO_BUFFER_SIZE).use { output ->
+                val buffer = ByteArray(IO_BUFFER_SIZE)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val read = source.read(buffer)
+                    if (read < 0) break
+                    copied += read
+                    if (copied > policy.maxArchiveBytes) {
+                        throw ArchiveValidationException.TooLarge("The selected ZIP exceeds the app size limit.")
+                    }
+                    output.write(buffer, 0, read)
+                }
+            }
+        }
+        if (copied == 0L) throw ArchiveValidationException.EmptyArchive()
+    }
+
+    private fun Uri.displayName(): String? {
+        DocumentFile.fromSingleUri(appContext, this)?.name?.takeIf(String::isNotBlank)?.let { return it }
+        return appContext.contentResolver.query(this, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (!cursor.moveToFirst()) null
+                else cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    .takeIf { it >= 0 }
+                    ?.let(cursor::getString)
+                    ?.takeIf(String::isNotBlank)
+            }
+    }
+
+    private fun ArchiveInspection.importUnits(sourceName: String): List<ArchiveImportUnit> {
+        val wrapper = installRoot
+        val rootPrefix = wrapper?.let { "$it/" }.orEmpty()
+        val contents = entries.filter { it.path.startsWith(rootPrefix) && it.path != wrapper }
+        val roots = contents.asSequence()
+            .mapNotNull { entry ->
+                val relative = entry.path.removePrefix(rootPrefix)
+                if ('/' in relative || entry.isDirectory) relative.substringBefore('/') else null
+            }
+            .filterNot { it.lowercase() in IGNORED_ARCHIVE_DIRECTORIES }
+            .distinct()
+            .toList()
+        val rootFiles = contents.filter { '/' !in it.path.removePrefix(rootPrefix) && !it.isDirectory }
+        val hasOnlyPackMetadata = rootFiles.all { entry ->
+            val name = entry.path.substringAfterLast('/').lowercase()
+            name in PACK_METADATA_FILES || name.startsWith("license.") || name.startsWith("readme.")
+        }
+        if (roots.isEmpty() && rootFiles.any { it.path.substringAfterLast('/').equals("manifest.json", ignoreCase = true) }) {
+            throw IllegalStateException(
+                "This ZIP contains only a modpack manifest. It lists dependencies but does not include the mod files.",
+            )
+        }
+        val splitFolders = roots.size > 1 && (rootFiles.isEmpty() || hasOnlyPackMetadata)
+        if (splitFolders) {
+            return roots.map { root ->
+                val unitRoot = rootPrefix + root
+                val unitEntries = entries.filter { it.path == unitRoot || it.path.startsWith("$unitRoot/") }
+                ArchiveImportUnit(
+                    folderName = root.sanitizeFolderName(),
+                    inspection = copy(
+                        entries = unitEntries,
+                        totalBytes = unitEntries.sumOf { it.size },
+                        installRoot = unitRoot,
+                    ),
+                )
+            }
+        }
+
+        if (wrapper != null) return listOf(ArchiveImportUnit(wrapper.sanitizeFolderName(), this))
+        if (roots.size == 1 && rootFiles.isEmpty()) {
+            val root = roots.single()
+            return listOf(ArchiveImportUnit(root.sanitizeFolderName(), copy(installRoot = root)))
+        }
+
+        val archiveName = sourceName.substringBeforeLast('.', sourceName)
+        return listOf(ArchiveImportUnit(archiveName.sanitizeFolderName(), this))
     }
 
     private suspend fun commitArchiveToMods(
@@ -361,7 +513,22 @@ class ModInstaller(
         const val IO_BUFFER_SIZE = 64 * 1024
         const val UNKNOWN_LENGTH_PROGRESS_INTERVAL_BYTES = 512 * 1024L
         const val LOVELY_IGNORE = ".lovelyignore"
+        val IGNORED_ARCHIVE_DIRECTORIES = setOf("__macosx", ".git", ".github", "docs", "documentation")
+        val PACK_METADATA_FILES = setOf(
+            "readme", "readme.md", "readme.txt", "license", "copying",
+            "manifest.json", "changelog.md", "notice", "notice.md", "icon.png", "icon.jpg",
+        )
     }
+}
+
+private data class ArchiveImportUnit(
+    val folderName: String,
+    val inspection: ArchiveInspection,
+)
+
+sealed interface ArchiveImportResult {
+    data class Imported(val folderNames: List<String>) : ArchiveImportResult
+    data class Failed(val message: String) : ArchiveImportResult
 }
 
 data class InstallProgress(
@@ -388,5 +555,10 @@ sealed interface InstallResult {
 
 private fun Exception.userFacingInstallMessage(title: String): String {
     val raw = message ?: return "Unknown error while installing $title."
+    return raw.redactPrivatePaths()
+}
+
+private fun Exception.userFacingImportMessage(fileName: String): String {
+    val raw = message ?: return "Unknown error while importing $fileName."
     return raw.redactPrivatePaths()
 }

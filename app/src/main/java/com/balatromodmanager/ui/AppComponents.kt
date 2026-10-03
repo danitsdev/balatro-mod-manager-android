@@ -62,14 +62,20 @@ import com.balatromodmanager.ui.theme.BmmColor
 @Composable
 internal fun PixelPanel(
     modifier: Modifier = Modifier,
-    borderColor: Color = BmmColor.Cream,
+    borderColor: Color = Color.Transparent,
     containerColor: Color = BmmColor.PanelOpaque,
     contentPadding: PaddingValues = PaddingValues(14.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val shape = RoundedCornerShape(4.dp)
+    val borderModifier = if (borderColor == Color.Transparent) {
+        Modifier
+    } else {
+        Modifier.border(1.dp, borderColor, shape)
+    }
     Card(
-        modifier = modifier.fillMaxWidth().border(2.dp, borderColor, RoundedCornerShape(4.dp)),
-        shape = RoundedCornerShape(4.dp),
+        modifier = modifier.fillMaxWidth().then(borderModifier),
+        shape = shape,
         colors = CardDefaults.cardColors(containerColor = containerColor),
     ) {
         Column(modifier = Modifier.padding(contentPadding), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
@@ -86,7 +92,7 @@ private fun CenterPanel(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 internal fun StatusPill(label: String, color: Color) {
     Box(
-        modifier = Modifier.background(color, RoundedCornerShape(3.dp)).border(1.dp, BmmColor.Cream.copy(alpha = 0.55f), RoundedCornerShape(3.dp)).padding(horizontal = 9.dp, vertical = 5.dp),
+        modifier = Modifier.background(color, RoundedCornerShape(3.dp)).padding(horizontal = 9.dp, vertical = 5.dp),
     ) { Text(label, color = BmmColor.Cream, fontSize = 14.sp, maxLines = 1) }
 }
 
@@ -128,6 +134,7 @@ internal fun CategoryBar(categories: List<String>, selected: String?, onCategory
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(4.dp),
+            border = null,
             colors = ButtonDefaults.outlinedButtonColors(containerColor = BmmColor.FilterControl, contentColor = BmmColor.Cream),
         ) {
             Text(selected ?: "All", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -159,6 +166,7 @@ internal fun SortBar(selected: CatalogSortMode, onSortChange: (CatalogSortMode) 
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(4.dp),
+            border = null,
             colors = ButtonDefaults.outlinedButtonColors(containerColor = BmmColor.FilterControl, contentColor = BmmColor.Cream),
         ) {
             Text(selected.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -195,12 +203,10 @@ internal fun SquareSwitch(
 ) {
     val haptic = LocalHapticFeedback.current
     val background = if (checked) BmmColor.Green else BmmColor.Neutral
-    val border = BmmColor.Cream
     Box(
         modifier = modifier
             .size(width = 46.dp, height = 24.dp)
             .background(background, RoundedCornerShape(4.dp))
-            .border(1.5.dp, border.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
             .clickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onCheckedChange(!checked)

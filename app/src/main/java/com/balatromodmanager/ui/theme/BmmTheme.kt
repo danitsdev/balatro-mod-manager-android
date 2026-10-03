@@ -1,13 +1,16 @@
 package com.balatromodmanager.ui.theme
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -15,6 +18,11 @@ import android.app.Activity
 import com.balatromodmanager.R
 
 internal val PixelFont = FontFamily(Font(R.font.m6x11plus))
+private val BalatroShapes = Shapes(
+    small = RoundedCornerShape(4.dp),
+    medium = RoundedCornerShape(4.dp),
+    large = RoundedCornerShape(6.dp),
+)
 
 internal object BmmColor {
     var darkMode: Boolean = false
@@ -48,12 +56,18 @@ internal fun BalatroManagerTheme(darkMode: Boolean, content: @Composable () -> U
     BmmColor.darkMode = darkMode
     val typography = androidx.compose.material3.Typography().run {
         copy(
+            displayLarge = displayLarge.copy(fontFamily = PixelFont, letterSpacing = 0.sp),
+            displayMedium = displayMedium.copy(fontFamily = PixelFont, letterSpacing = 0.sp),
             displaySmall = displaySmall.copy(fontFamily = PixelFont, fontSize = 38.sp, letterSpacing = 0.sp),
+            headlineLarge = headlineLarge.copy(fontFamily = PixelFont, letterSpacing = 0.sp),
+            headlineMedium = headlineMedium.copy(fontFamily = PixelFont, letterSpacing = 0.sp),
             headlineSmall = headlineSmall.copy(fontFamily = PixelFont, fontSize = 30.sp, letterSpacing = 0.sp),
             titleLarge = titleLarge.copy(fontFamily = PixelFont, fontSize = 24.sp, letterSpacing = 0.sp),
             titleMedium = titleMedium.copy(fontFamily = PixelFont, fontSize = 20.sp, letterSpacing = 0.sp),
+            titleSmall = titleSmall.copy(fontFamily = PixelFont, letterSpacing = 0.sp),
             bodyLarge = bodyLarge.copy(fontFamily = PixelFont, fontSize = 18.sp, letterSpacing = 0.sp),
             bodyMedium = bodyMedium.copy(fontFamily = PixelFont, fontSize = 16.sp, letterSpacing = 0.sp),
+            bodySmall = bodySmall.copy(fontFamily = PixelFont, letterSpacing = 0.sp),
             labelLarge = labelLarge.copy(fontFamily = PixelFont, fontSize = 16.sp, letterSpacing = 0.sp),
             labelMedium = labelMedium.copy(fontFamily = PixelFont, fontSize = 14.sp, letterSpacing = 0.sp),
             labelSmall = labelSmall.copy(fontFamily = PixelFont, fontSize = 12.sp, letterSpacing = 0.sp),
@@ -98,6 +112,7 @@ internal fun BalatroManagerTheme(darkMode: Boolean, content: @Composable () -> U
     }
     MaterialTheme(
         colorScheme = colors,
+        shapes = BalatroShapes,
         typography = typography,
         content = content,
     )

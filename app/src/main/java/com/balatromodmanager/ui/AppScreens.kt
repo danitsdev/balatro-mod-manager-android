@@ -1,7 +1,7 @@
 package com.balatromodmanager.ui
 
+import android.net.Uri
 import androidx.compose.foundation.background
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
@@ -30,37 +31,78 @@ import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.foundation.border
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.OutlinedButton
 import com.balatromodmanager.DetectedGameBuild
+import com.balatromodmanager.AppUpdateNotice
 import com.balatromodmanager.DependencyStatus
 import com.balatromodmanager.MainUiState
-import com.balatromodmanager.findDependencyMod
-import com.balatromodmanager.missingDependencies
+import com.balatromodmanager.resolveDependencies
 import com.balatromodmanager.openModsFolder
+import com.balatromodmanager.openUrl
 import com.balatromodmanager.readablePath
 import com.balatromodmanager.shortSyncStamp
+import com.balatromodmanager.isBundledLovelyDependency
 import com.balatromodmanager.catalog.CatalogMod
 import com.balatromodmanager.settings.VisualSettings
+import com.balatromodmanager.settings.CatalogCardSize
 import com.balatromodmanager.storage.TreeValidation
 import com.balatromodmanager.ui.theme.BmmColor
+
+@Composable
+internal fun AppUpdateBanner(
+    notice: AppUpdateNotice,
+    onOpenRelease: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = BmmColor.PanelOpaque,
+        contentColor = BmmColor.Cream,
+        shadowElevation = 4.dp,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("APP UPDATE", style = MaterialTheme.typography.labelSmall, color = BmmColor.Gold)
+                Text(
+                    "${notice.tag} is available",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Button(
+                onClick = onOpenRelease,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(5.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green, contentColor = Color.White),
+            ) {
+                Text("Release", maxLines = 1)
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Filled.Close, contentDescription = "Dismiss update", tint = BmmColor.MutedCream)
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,39 +136,29 @@ internal fun SettingsScreen(
                 Text("Animated background", color = BmmColor.Cream)
                 SquareSwitch(checked = visualSettings.animatedBackground, onCheckedChange = { enabled -> onVisualSettingsChange(visualSettings.copy(animatedBackground = enabled)) })
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Card size", color = BmmColor.Cream)
-                Text("${(visualSettings.cardScale * 100).toInt()}%", color = BmmColor.Gold)
-            }
-            Slider(
-                value = visualSettings.cardScale,
-                onValueChange = { value -> onVisualSettingsChange(visualSettings.copy(cardScale = value)) },
-                valueRange = 0.75f..1.4f,
-                steps = 12,
-                colors = SliderDefaults.colors(
-                    thumbColor = BmmColor.Gold,
-                    activeTrackColor = BmmColor.Gold,
-                    inactiveTrackColor = BmmColor.Neutral,
-                    activeTickColor = Color.Transparent,
-                    inactiveTickColor = Color.Transparent
-                ),
-                thumb = {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .background(BmmColor.Cream, RoundedCornerShape(1.dp))
-                            .border(1.5.dp, BmmColor.Gold, RoundedCornerShape(1.dp))
-                    )
-                },
-                onValueChangeFinished = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CatalogCardSize.entries.forEach { size ->
+                    val selected = visualSettings.cardSize == size
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onVisualSettingsChange(visualSettings.copy(cardSize = size))
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(4.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selected) BmmColor.Gold.copy(alpha = 0.22f) else BmmColor.PanelRaised,
+                            contentColor = if (selected) BmmColor.Gold else BmmColor.Cream,
+                        ),
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(size.name.lowercase().replaceFirstChar(Char::uppercase))
+                            Text("${size.columnsPerRow} per row", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
-            )
-            Text("Smaller cards fit more per row.", color = BmmColor.MutedCream, style = MaterialTheme.typography.bodyMedium)
+            }
         }
         PixelPanel {
             Text("Mods", style = MaterialTheme.typography.titleLarge, color = BmmColor.Gold)
@@ -146,15 +178,16 @@ internal fun SettingsScreen(
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(8.dp))
-                    OutlinedButton(
+                    Button(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onPickFolder()
                         },
                         shape = RoundedCornerShape(4.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BmmColor.PanelRaised, contentColor = BmmColor.Cream),
                     ) {
-                        Text("Change", color = Color.White)
+                        Text("Change")
                     }
                 }
             }
@@ -212,16 +245,15 @@ internal fun SettingsScreen(
                 }
             }
         }
-        OutlinedButton(
+        Button(
             onClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onOpenLicenses()
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(4.dp),
-            border = BorderStroke(2.dp, BmmColor.Cream),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = BmmColor.PanelOpaque,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BmmColor.PanelRaised,
                 contentColor = BmmColor.Cream,
             ),
         ) {
@@ -239,6 +271,7 @@ internal fun OnboardingScreen(
     detectedBuilds: List<DetectedGameBuild>,
     onPickFolder: () -> Unit,
     onPickDetectedBuild: (DetectedGameBuild) -> Unit,
+    onOpenLmm: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     Column(
@@ -251,25 +284,32 @@ internal fun OnboardingScreen(
     ) {
         HeroHeader()
         PixelPanel {
-            Text("Game Folder Access", style = MaterialTheme.typography.headlineSmall, color = BmmColor.Gold)
-            Text("Connect the Balatro game folder used by Lovely Mobile Maker.", color = BmmColor.Cream)
-            RequirementRow("1", "Open your LMM Balatro build once.")
-            RequirementRow("2", "Grant access to the folder that contains ASET.")
-            RequirementRow("3", "The manager validates ASET/Mods before making changes.")
+            Text("Set up your game folder", style = MaterialTheme.typography.headlineSmall, color = BmmColor.Gold)
+            Text("This manager needs a Balatro Android build made with Lovely Mobile Maker (LMM).", color = BmmColor.Cream)
+            RequirementRow("1", "Create and install your Android build with LMM.")
+            RequirementRow("2", "Open the game at least once. The first launch can be unstable; this step creates ASET/Mods.")
+            RequirementRow("3", "Choose the parent folder that contains ASET, then confirm Use this folder.")
+            Text("After access is granted, the manager checks ASET/Mods and handles mod installation and management.", color = BmmColor.MutedCream)
+            Button(
+                onClick = onOpenLmm,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(4.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green, contentColor = BmmColor.Cream),
+            ) { Text("Open Lovely Mobile Maker") }
         }
         validation?.let { ValidationCard(it) }
         if (detectedBuilds.isNotEmpty()) { DetectedBuildsCard(detectedBuilds, onPickDetectedBuild) }
         else {
             PixelPanel(borderColor = BmmColor.Amber, containerColor = Color(0xFF3A2E1B)) {
                 Text("Game folder not detected", style = MaterialTheme.typography.titleLarge, color = BmmColor.Gold)
-                Text("Choose the LMM game folder that contains ASET.", color = BmmColor.Cream)
+                Text("Choose the LMM parent folder with ASET inside.", color = BmmColor.Cream)
             }
         }
         Button(onClick = {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             onPickFolder()
         }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green, contentColor = BmmColor.Cream), shape = RoundedCornerShape(4.dp)) {
-            Icon(Icons.Filled.Folder, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Choose Game Folder")
+            Icon(Icons.Filled.Folder, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Select Folder with ASET")
         }
     }
 }
@@ -281,8 +321,10 @@ internal fun DependencySheet(
     onOpenDependency: (CatalogMod) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val missing = mod.missingDependencies(dependencies)
+    val requirements = mod.resolveDependencies(catalogMods, dependencies)
+        .filterNot { it.identifier.isBundledLovelyDependency() }
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -293,42 +335,47 @@ internal fun DependencySheet(
         ) {
             PixelPanel(
                 modifier = Modifier.widthIn(max = 420.dp),
-                borderColor = BmmColor.Cream,
                 containerColor = BmmColor.PanelRaised,
                 contentPadding = PaddingValues(18.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Icon(Icons.Filled.WarningAmber, contentDescription = null, tint = BmmColor.Gold, modifier = Modifier.size(26.dp))
-                    Text("Required Dependencies", style = MaterialTheme.typography.titleLarge, color = BmmColor.Gold)
+                    Text("Requirements for ${mod.title}", style = MaterialTheme.typography.titleLarge, color = BmmColor.Gold, maxLines = 2)
                 }
-                Text(
-                    "${mod.title} requires the following missing dependencies:",
-                    color = BmmColor.Cream,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                missing.forEach { dependency ->
-                    val dependencyMod = catalogMods.findDependencyMod(dependency)
+                requirements.forEach { dependency ->
+                    val dependencyMod = dependency.catalogMod
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = dependencyMod != null) {
-                                if (dependencyMod != null) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onOpenDependency(dependencyMod)
-                                }
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (dependencyMod != null) onOpenDependency(dependencyMod)
+                                else context.openUrl("https://thunderstore.io/c/balatro/?q=${Uri.encode(dependency.identifier)}")
                             }
                             .padding(vertical = 6.dp),
                     ) {
                         Text(
-                            dependency,
-                            color = if (dependencyMod != null) BmmColor.Gold else BmmColor.MutedCream,
+                            dependency.title,
+                            color = BmmColor.Gold,
                             style = MaterialTheme.typography.titleMedium,
-                            textDecoration = if (dependencyMod != null) TextDecoration.Underline else TextDecoration.None,
                         )
-                        Text(dependencyDescription(dependency), color = BmmColor.MutedCream, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            buildString {
+                                append("Required: ").append(dependency.version.ifBlank { "version not listed" })
+                                append("  ·  ")
+                                append(
+                                    when {
+                                        dependency.installed -> "Installed"
+                                        dependencyMod != null -> "Available in catalog (${dependencyMod.version})"
+                                        else -> "Not in catalog"
+                                    },
+                                )
+                            },
+                            color = if (dependency.installed) BmmColor.Green else BmmColor.MutedCream,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
-                Text("Installing these first is recommended.", color = BmmColor.MutedCream)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
@@ -339,7 +386,7 @@ internal fun DependencySheet(
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(4.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Blue, contentColor = Color.White),
-                    ) { Text("Download Anyway", maxLines = 1) }
+                    ) { Text("Install anyway", maxLines = 1) }
                     Button(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -347,17 +394,11 @@ internal fun DependencySheet(
                         },
                         shape = RoundedCornerShape(4.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Danger, contentColor = Color.White),
-                    ) { Text("Close") }
+                    ) { Text("Back") }
                 }
             }
         }
     }
-}
-
-private fun dependencyDescription(name: String): String = when {
-    name.equals("Steamodded", ignoreCase = true) -> "Core modding framework"
-    name.equals("Amulet", ignoreCase = true) -> "Large-number API replacing Talisman"
-    else -> "Required mod"
 }
 
 @Composable

@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,7 +47,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.painterResource
 import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.CachePolicy
@@ -55,7 +55,6 @@ import coil.request.ImageRequest
 import coil.size.Precision
 import com.balatromodmanager.MainUiState
 import com.balatromodmanager.OperationState
-import com.balatromodmanager.R
 import com.balatromodmanager.accentColor
 import com.balatromodmanager.isInstalled
 import com.balatromodmanager.managedManifest
@@ -82,10 +81,13 @@ internal fun CatalogScreen(
     onCategoryChange: (String?) -> Unit,
     onSortChange: (CatalogSortMode) -> Unit,
     onRefreshCatalog: () -> Unit,
+    onRefreshCatalogModDetails: (String, String) -> Unit,
     onHydrateCatalogMod: (String) -> Unit,
+    onHydrateCatalogVersion: (String, String) -> Unit,
     visualSettings: VisualSettings,
     selectedMod: CatalogMod?,
     onOpenMod: (CatalogMod) -> Unit,
+    onOpenDependency: (CatalogMod) -> Unit,
     onBackFromMod: () -> Unit,
     onInstall: (CatalogMod) -> Unit,
     onSetLocalModEnabled: (String, Boolean) -> Unit,
@@ -103,6 +105,7 @@ internal fun CatalogScreen(
         val localMod = state.localMods.firstOrNull { selectedMod.matchesLocal(it) }
         ModDetailScreen(
             mod = selectedMod,
+            catalogMods = state.catalogMods,
             installed = selectedMod.isInstalled(state),
             canGetOfficial = manifest == null && localMod != null,
             hasUpdate = manifest?.let { selectedMod.hasUpdateFor(it) } == true,
@@ -111,10 +114,16 @@ internal fun CatalogScreen(
             busy = state.operation is OperationState.Running,
             localToggleBusy = localToggleBusy,
             enabled = localMod?.enabled,
+            isRefreshing = state.isCatalogRefreshing,
+            installedVersion = manifest?.version?.takeIf(String::isNotBlank)
+                ?: localMod?.version?.takeIf(String::isNotBlank),
             padding = padding,
             onBack = onBackFromMod,
             onTagClick = { onCategoryChange(it); onBackFromMod() },
-            onInstall = { onInstall(selectedMod) },
+            onInstall = onInstall,
+            onRefresh = { versionNumber -> onRefreshCatalogModDetails(selectedMod.id, versionNumber) },
+            onHydrateVersion = { versionNumber -> onHydrateCatalogVersion(selectedMod.id, versionNumber) },
+            onOpenDependency = onOpenDependency,
             onToggleEnabled = {
                 if (localMod != null) onSetLocalModEnabled(localMod.folderName, !localMod.enabled)
             },
@@ -150,7 +159,7 @@ internal fun CatalogScreen(
         } else {
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(visualSettings.cardMinWidthDp.dp),
+                columns = GridCells.Fixed(visualSettings.cardSize.columnsPerRow),
                 modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -169,6 +178,7 @@ internal fun CatalogScreen(
                         enabled = localMod?.enabled,
                         hasUpdate = manifest?.let { mod.hasUpdateFor(it) } == true,
                         canGetOfficial = manifest == null && localMod != null,
+                        cardSize = visualSettings.cardSize,
                         operation = (state.operation as? OperationState.Running)
                             ?.takeIf { it.downloadingModId == mod.id },
                         busy = state.operation is OperationState.Running,
@@ -209,7 +219,13 @@ private fun CatalogHeader(
             }
         }
         OutlinedTextField(
-            value = state.filters.query, onValueChange = onQueryChange,
+            value = state.filters.query,
+            onValueChange = { query ->
+                if (query.isNotBlank() && state.filters.selectedCategory != null) {
+                    onCategoryChange(null)
+                }
+                onQueryChange(query)
+            },
             modifier = Modifier.fillMaxWidth(),
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = BmmColor.MutedCream) },
             placeholder = {
@@ -288,7 +304,7 @@ private fun CatalogThumbnailPrefetcher(
 private const val ThumbnailPrefetchWindow = 12
 private const val ThumbnailPrefetchStartDelayMs = 5_000L
 private const val ThumbnailPrefetchWidthDp = 192
-private const val ThumbnailAspectRatio = 1.72f
+private const val ThumbnailAspectRatio = 1f
 private val ThumbnailPrefetchDispatcher = Dispatchers.IO.limitedParallelism(2)
 
 
@@ -322,34 +338,27 @@ internal fun ModThumbnail(mod: CatalogMod, modifier: Modifier = Modifier) {
         ImageRequest.Builder(context)
             .data(mod.thumbnailUrl)
             .precision(Precision.INEXACT)
-            .crossfade(true)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .build()
     }
 
     Box(
-        modifier = modifier
-            .background(BmmColor.Panel)
-            .clip(RoundedCornerShape(2.dp)),
+        modifier = modifier.clip(RoundedCornerShape(2.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        androidx.compose.foundation.Image(
-            painter = painterResource(R.drawable.cover),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
         if (mod.thumbnailUrl.isNotBlank()) {
-            AsyncImage(
-                model = imageRequest,
-                contentDescription = mod.title,
-                contentScale = ContentScale.Crop,
-                onLoading = { loading = true },
-                onSuccess = { loading = false },
-                onError = { loading = false },
-                modifier = Modifier.fillMaxSize(),
-            )
+            key(mod.thumbnailUrl) {
+                AsyncImage(
+                    model = imageRequest,
+                    contentDescription = mod.title,
+                    contentScale = ContentScale.Fit,
+                    onLoading = { loading = true },
+                    onSuccess = { loading = false },
+                    onError = { loading = false },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             if (loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(26.dp),
@@ -357,8 +366,6 @@ internal fun ModThumbnail(mod: CatalogMod, modifier: Modifier = Modifier) {
                     strokeWidth = 2.dp,
                 )
             }
-        } else {
-            loading = false
         }
     }
 }

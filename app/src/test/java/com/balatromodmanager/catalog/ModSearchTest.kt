@@ -51,7 +51,14 @@ class ModSearchTest {
     @Test
     fun automaticInstallAcceptsExtensionlessHttpsArchives() {
         assertTrue(CatalogMod(id = "a", title = "A", author = "A", downloadUrl = "https://example.com/mod.zip").supportsAutomaticInstall)
-        assertTrue(CatalogMod(id = "bmi", title = "BMI", author = "BMI", downloadUrl = "bmi://author@mod").supportsAutomaticInstall)
+        assertTrue(
+            CatalogMod(
+                id = "author@mod",
+                title = "Mod",
+                author = "Author",
+                downloadUrl = "https://thunderstore.io/package/download/author/mod/1.0.0/",
+            ).supportsAutomaticInstall,
+        )
         assertTrue(
             CatalogMod(
                 id = "banner",
@@ -65,7 +72,7 @@ class ModSearchTest {
     }
 
     @Test
-    fun duplicateLegacyAndBmiEntriesCollapseByRepository() {
+    fun duplicateLegacyAndCatalogEntriesCollapseByRepository() {
         val duplicates = listOf(
             CatalogMod(id = "Lost_Edition", title = "Lost Edition", author = "Danitsdev", repo = "https://github.com/danitsdev/Lost_Edition"),
             CatalogMod(id = "danitsdev@Lost_Edition", title = "Lost Edition", author = "Danitsdev", repo = "https://github.com/danitsdev/Lost_Edition/", thumbnailUrl = "thumb"),
@@ -110,13 +117,13 @@ class ModSearchTest {
             CatalogMod(
                 id = "Cryptid", title = "Cryptid", author = "MathIsFun0",
                 repo = "https://github.com/MathIsFun0/Cryptid", downloadsTotal = 149_393,
-                thumbnailUrl = "https://api-bmi.example/Cryptid.webp", description = "Short",
+                thumbnailUrl = "https://catalog.example/Cryptid.webp", description = "Short",
             ),
         ).deduplicatedCatalog().single()
 
         assertEquals("Cryptid", result.id)
         assertEquals(149_393, result.downloadsTotal)
-        assertEquals("https://api-bmi.example/Cryptid.webp", result.thumbnailUrl)
+        assertEquals("https://catalog.example/Cryptid.webp", result.thumbnailUrl)
         assertEquals("Short", result.description)
     }
 

@@ -17,15 +17,110 @@ import androidx.compose.ui.graphics.Color
 internal data class DependencyStatus(
     val steamoddedInstalled: Boolean,
     val amuletInstalled: Boolean,
+    val lovelyInstalled: Boolean = true,
+    val installedPackageIds: Set<String> = emptySet(),
+    val installedFolderNames: Set<String> = emptySet(),
 )
 
-internal fun CatalogMod.missingDependencies(dependencies: DependencyStatus): List<String> = buildList {
-    if (requiresSteamodded && !dependencies.steamoddedInstalled) add("Steamodded")
-    if (requiresTalisman && !dependencies.amuletInstalled) add("Amulet")
+internal fun String.isBundledLovelyDependency(): Boolean =
+    startsWith("Thunderstore-Lovely-", ignoreCase = true)
+
+internal fun String.canonicalSteamoddedDependency(catalogMods: List<CatalogMod>): String {
+    val legacyPrefix = "Steamopollys-Steamodded-"
+    if (!startsWith(legacyPrefix, ignoreCase = true)) return this
+
+    val currentPackage = catalogMods.firstOrNull {
+        it.author.equals("Steamodded", ignoreCase = true) && it.title.equals("Steamodded", ignoreCase = true)
+    }
+    return if (currentPackage != null && currentPackage.version.isNotBlank()) {
+        "${currentPackage.author}-${currentPackage.title}-${currentPackage.version}"
+    } else {
+        "Steamodded-Steamodded-${substring(legacyPrefix.length)}"
+    }
 }
+
+internal data class PackageDependency(
+    val identifier: String,
+    val title: String,
+    val version: String,
+    val catalogMod: CatalogMod?,
+    val installed: Boolean,
+)
+
+internal fun CatalogMod.resolveDependencies(
+    catalogMods: List<CatalogMod>,
+    status: DependencyStatus,
+): List<PackageDependency> {
+    val identifiers = requiredPackages.map { it.canonicalSteamoddedDependency(catalogMods) }.toMutableList()
+    if (identifiers.isEmpty()) {
+        if (requiresSteamodded) identifiers += "Steamodded-Steamodded"
+        if (requiresAmulet) identifiers += "just_frostice482-Amulet"
+    }
+
+    return identifiers.distinct().mapNotNull { identifier ->
+        val isSteamodded = identifier.startsWith("Steamodded-Steamodded", ignoreCase = true) ||
+            identifier.startsWith("Steamopollys-Steamodded", ignoreCase = true)
+        val isAmulet = identifier.startsWith("just_frostice482-Amulet", ignoreCase = true) ||
+            identifier.startsWith("MathIsFun0-Talisman", ignoreCase = true)
+        val isLovely = identifier.isBundledLovelyDependency()
+        val dependencyMod = catalogMods.mapNotNull { candidate ->
+            val packagePrefix = "${candidate.author}-${candidate.title}-"
+            if (identifier.startsWith(packagePrefix, ignoreCase = true)) packagePrefix to candidate else null
+        }.maxByOrNull { (packagePrefix, _) -> packagePrefix.length }?.second ?: when {
+            isSteamodded -> catalogMods.findDependencyMod("Steamodded")
+            isAmulet -> catalogMods.findDependencyMod("Amulet")
+            else -> null
+        }
+        val packagePrefixes = buildList {
+            dependencyMod?.let { add("${it.author}-${it.title}-") }
+            when {
+                identifier.startsWith("Steamopollys-Steamodded-", ignoreCase = true) -> add("Steamopollys-Steamodded-")
+                identifier.startsWith("Steamodded-Steamodded-", ignoreCase = true) -> add("Steamodded-Steamodded-")
+                identifier.startsWith("just_frostice482-Amulet-", ignoreCase = true) -> add("just_frostice482-Amulet-")
+                identifier.startsWith("MathIsFun0-Talisman-", ignoreCase = true) -> add("MathIsFun0-Talisman-")
+                isLovely -> add("Thunderstore-lovely-")
+            }
+        }
+        val packagePrefix = packagePrefixes.firstOrNull { identifier.startsWith(it, ignoreCase = true) }
+        val version = packagePrefix?.let { identifier.substring(it.length) }.orEmpty()
+        val installed = when {
+            isSteamodded -> status.steamoddedInstalled
+            isAmulet -> status.amuletInstalled
+            isLovely -> status.lovelyInstalled
+            dependencyMod != null -> status.installedPackageIds.any { it.equals(dependencyMod.id, ignoreCase = true) } ||
+                dependencyMod.installFolder.equalsAny(status.installedFolderNames)
+            else -> false
+        }
+
+        PackageDependency(
+            identifier = identifier,
+            title = dependencyMod?.title ?: when {
+                isSteamodded -> "Steamodded"
+                isAmulet -> "Amulet"
+                isLovely -> "Lovely (included with LMM)"
+                else -> identifier
+            },
+            version = version,
+            catalogMod = dependencyMod,
+            installed = installed,
+        )
+    }
+}
+
+internal fun CatalogMod.missingDependencies(
+    dependencies: DependencyStatus,
+    catalogMods: List<CatalogMod> = emptyList(),
+): List<PackageDependency> = resolveDependencies(catalogMods, dependencies).filterNot { it.installed }
+
+private fun String.equalsAny(values: Set<String>): Boolean = values.any { equals(it, ignoreCase = true) }
 
 internal fun List<CatalogMod>.findDependencyMod(name: String): CatalogMod? {
     val searchName = if (name.equals("Talisman", ignoreCase = true)) "Amulet" else name
+    if (searchName.equals("Steamodded", ignoreCase = true)) {
+        firstOrNull { it.author.equals("Steamodded", ignoreCase = true) && it.title.equals("Steamodded", ignoreCase = true) }
+            ?.let { return it }
+        return null
+    }
     return firstOrNull { it.title.equals(searchName, ignoreCase = true) }
         ?: firstOrNull { it.folderName.equals(if (searchName == "Steamodded") "smods" else searchName, ignoreCase = true) }
 }
@@ -47,7 +142,7 @@ internal fun CatalogMod.isInstalled(state: MainUiState): Boolean {
 
 internal fun CatalogMod.shortDescription(): String = summary.cleanMarkdown()
     .ifBlank { description.cleanMarkdown() }
-    .ifBlank { "No description in the index." }
+    .ifBlank { "No description in the catalog." }
 
 internal fun CatalogMod.accentColor(): Color {
     return when {

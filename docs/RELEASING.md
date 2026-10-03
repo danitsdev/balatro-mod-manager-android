@@ -1,51 +1,35 @@
-# Android Release Procedure
+# Android releases
 
-GitHub Releases must use a stable signing key. Never commit the keystore or its
-passwords. Losing this key prevents users from installing future versions over an
-existing release.
+A release must be signed with the same Android keystore used for earlier releases. If that key is lost, users cannot install a new release over an existing one.
 
-## One-time setup
+## Signing setup
 
-1. Generate and securely back up an Android keystore:
+Generate a keystore and keep an offline backup outside the repository:
 
-   ```text
-   keytool -genkeypair -v -keystore bmm-release.jks -alias bmm -keyalg RSA -keysize 4096 -validity 10000
-   ```
+    keytool -genkeypair -v -keystore bmm-release.jks -alias bmm -keyalg RSA -keysize 4096 -validity 10000
 
-2. Add these GitHub Actions repository secrets:
+Add these GitHub Actions secrets to the repository:
 
-   - `ANDROID_KEYSTORE_BASE64`: the complete keystore encoded as single-line Base64.
-   - `ANDROID_KEYSTORE_PASSWORD`: keystore password.
-   - `ANDROID_KEY_ALIAS`: key alias, such as `bmm`.
-   - `ANDROID_KEY_PASSWORD`: private-key password.
+- ANDROID_KEYSTORE_BASE64: the keystore encoded as a single-line Base64 value.
+- ANDROID_KEYSTORE_PASSWORD
+- ANDROID_KEY_ALIAS
+- ANDROID_KEY_PASSWORD
 
-3. Store an offline backup of the keystore and credentials in a separate secure location.
+## Publish
 
-## Publish a beta
+1. Update versionCode and versionName in app/build.gradle.kts.
+2. Add release notes in docs/releases/<version>.md.
+3. Commit and push the changes to the default branch.
+4. Push the matching tag, such as v0.2.0.
+5. The release workflow checks the tag, runs unit tests and lint, builds and verifies a signed APK, then publishes the APK and SHA-256 file to GitHub Releases.
+6. Install the published APK on a clean device and test upgrading from the previous release.
 
-1. Update `versionCode` and `versionName` in `app/build.gradle.kts`.
-2. Run `./gradlew testDebugUnitTest lintDebug assembleRelease` with signing variables configured.
-3. Commit the release changes and push the default branch.
-4. Create and push a matching tag, for example `v0.1.0-beta.1`.
-5. Confirm that the `Release Android APK` workflow passes.
-6. Test the APK attached to the generated GitHub release on a clean device and as an update.
-
-The workflow publishes `Balatro-Mod-Manager.apk` and `Balatro-Mod-Manager.apk.sha256`.
-Because every release uses the same asset names, the latest APK always remains at
-`releases/latest/download/Balatro-Mod-Manager.apk`. The
-release job fails instead of producing an unsigned APK when signing secrets are missing.
+The workflow attaches Balatro-Mod-Manager.apk and Balatro-Mod-Manager.apk.sha256. The latest APK is available at releases/latest/download/Balatro-Mod-Manager.apk.
 
 ## Local signed build
 
-Set the following environment variables before running `assembleRelease`:
+Set BMM_KEYSTORE_PATH, BMM_KEYSTORE_PASSWORD, BMM_KEY_ALIAS, and BMM_KEY_PASSWORD, then run:
 
-```text
-BMM_KEYSTORE_PATH
-BMM_KEYSTORE_PASSWORD
-BMM_KEY_ALIAS
-BMM_KEY_PASSWORD
-```
+    ./gradlew assembleRelease
 
-The keystore path may be absolute. Files matching `*.jks`, `*.keystore`, and
-`keystore.properties` are ignored by Git, but contributors should still keep keys
-outside the repository directory.
+The key path may be absolute. The repository ignores common keystore files, but keep signing material outside the working tree.

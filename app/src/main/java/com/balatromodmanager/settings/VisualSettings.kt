@@ -2,8 +2,12 @@ package com.balatromodmanager.settings
 
 data class VisualSettings(
     val animatedBackground: Boolean = false,
-    val cardScale: Float = 1f,
-    val darkMode: Boolean = false,
-) {
-    val cardMinWidthDp: Float get() = 165f * cardScale
+    val cardSize: CatalogCardSize = CatalogCardSize.MEDIUM,
+    val darkMode: Boolean = true,
+)
+
+enum class CatalogCardSize(val columnsPerRow: Int) {
+    SMALL(3),
+    MEDIUM(2),
+    LARGE(1),
 }
