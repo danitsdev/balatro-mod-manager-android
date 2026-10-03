@@ -154,7 +154,7 @@ internal fun SettingsScreen(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(size.name.lowercase().replaceFirstChar(Char::uppercase))
-                            Text("${size.columnsPerRow} per row", style = MaterialTheme.typography.labelSmall)
+                            Text(size.description, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }

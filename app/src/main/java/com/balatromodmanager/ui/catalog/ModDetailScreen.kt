@@ -76,6 +76,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -171,11 +172,20 @@ internal fun ModDetailScreen(
         else -> "Install"
     }
 
-    Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+    val layoutDirection = LocalLayoutDirection.current
+    Box(
+        modifier = Modifier.fillMaxSize().padding(
+            top = padding.calculateTopPadding(),
+            bottom = padding.calculateBottomPadding(),
+        ),
+    ) {
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = { onRefresh(selectedVersion.versionNumber) },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().padding(
+                start = padding.calculateLeftPadding(layoutDirection),
+                end = padding.calculateRightPadding(layoutDirection),
+            ),
         ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -260,7 +270,7 @@ internal fun ModDetailScreen(
         }
 
         ModDetailBottomBar(
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
             mod = mod,
             installed = installed,
             enabled = enabled,
@@ -468,7 +478,7 @@ private fun ModDescription(mod: CatalogMod, version: CatalogVersion) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         if (!version.readmeLoaded) {
             LinearProgressIndicator(
-                modifier = Modifier.width(52.dp).height(2.dp),
+                modifier = Modifier.fillMaxWidth().height(2.dp),
                 color = BmmColor.Gold,
                 trackColor = BmmColor.GlassBorder,
             )
@@ -673,7 +683,7 @@ private fun ModDetailBottomBar(
                     enabled = !busy && operation == null && primaryActionAvailable && actionLabel != "Installed",
                     modifier = Modifier.weight(1f).height(40.dp),
                     shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    contentPadding = if (operation != null) PaddingValues(0.dp) else PaddingValues(horizontal = 8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = BmmColor.Green,
                         contentColor = Color.White,
@@ -682,9 +692,34 @@ private fun ModDetailBottomBar(
                     ),
                 ) {
                     if (operation != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            ModOperationProgress(operation)
-                            Text(operation.message, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val progress = operation.progress?.coerceIn(0f, 1f)?.takeIf { it > 0f }
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                operation.message,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                            )
+                            if (progress == null) {
+                                LinearProgressIndicator(
+                                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                                    color = Color.White,
+                                    trackColor = Color.White.copy(alpha = 0.22f),
+                                )
+                            } else {
+                                LinearProgressIndicator(
+                                    progress = { progress },
+                                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                                    color = Color.White,
+                                    trackColor = Color.White.copy(alpha = 0.22f),
+                                )
+                            }
                         }
                     } else {
                         if (actionLabel != "Installed" && primaryActionAvailable) {

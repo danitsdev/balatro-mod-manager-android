@@ -41,7 +41,7 @@ class VisualSettingsRepository(
         val minimumWidth = this[Keys.cardScale]?.times(165f)
             ?: this[Keys.cardMinWidthDp]
         return when {
-            minimumWidth == null -> CatalogCardSize.MEDIUM
+            minimumWidth == null -> CatalogCardSize.LARGE
             minimumWidth < 140f -> CatalogCardSize.SMALL
             minimumWidth > 200f -> CatalogCardSize.LARGE
             else -> CatalogCardSize.MEDIUM

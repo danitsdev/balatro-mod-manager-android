@@ -399,7 +399,7 @@ class CatalogRepository(
         const val CATALOG_SCHEMA_VERSION = 7
         const val CACHE_MAX_AGE_MS = 60L * 60L * 1_000L
         const val README_CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
-        const val USER_AGENT = "BalatroModManagerAndroid/0.2.0"
+        const val USER_AGENT = "BalatroModManagerAndroid/0.2.1"
         // Keep this list explicit: package categories do not reliably describe mobile compatibility.
         val UNAVAILABLE_ON_MOBILE = setOf(
             "ebkr@r2modman",

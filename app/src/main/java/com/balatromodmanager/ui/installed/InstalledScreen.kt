@@ -1,6 +1,7 @@
 package com.balatromodmanager.ui.installed
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.balatromodmanager.MainUiState
 import com.balatromodmanager.OperationState
@@ -74,7 +77,6 @@ fun InstalledScreen(
     onSetLocalModsEnabled: (List<String>, Boolean) -> Unit,
 ) {
     val validation = state.validation as? TreeValidation.Valid ?: return
-    val haptic = LocalHapticFeedback.current
     val localMods = state.localMods
     val busy = state.operation is OperationState.Running
     val localToggleBusy = (state.operation as? OperationState.Running)?.isLocalToggle == true
@@ -131,92 +133,65 @@ fun InstalledScreen(
         modifier = Modifier.fillMaxSize().padding(padding),
     ) {
     LazyVerticalGrid(
-        columns = GridCells.Fixed(visualSettings.cardSize.columnsPerRow),
+        columns = GridCells.Adaptive(visualSettings.cardSize.minimumCellWidthDp.dp),
         modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(vertical = 14.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Installed Mods", style = MaterialTheme.typography.headlineSmall, color = BmmColor.Gold)
-                OutlinedTextField(
-                    value = installedQuery,
-                    onValueChange = { installedQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = BmmColor.MutedCream) },
-                    placeholder = { Text("Filter installed mods...", color = BmmColor.MutedCream) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(4.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = BmmColor.Input,
-                        unfocusedContainerColor = BmmColor.Input,
-                        disabledContainerColor = BmmColor.Input,
-                        focusedBorderColor = BmmColor.Gold,
-                        unfocusedBorderColor = BmmColor.Neutral,
-                        cursorColor = BmmColor.Gold,
-                        focusedTextColor = BmmColor.Cream,
-                        unfocusedTextColor = BmmColor.Cream,
-                    ),
-                )
-                Button(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onPickArchive()
-                    },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green),
-                ) {
-                    Icon(Icons.Filled.Folder, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Import mod / modpack")
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onSetLocalModsEnabled(disabledMods.map { it.folderName }, true)
-                        },
-                        enabled = (!busy || localToggleBusy) && disabledMods.isNotEmpty(),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(4.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green),
-                    ) {
-                        Icon(Icons.Filled.PowerSettingsNew, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Enable all")
-                    }
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onSetLocalModsEnabled(enabledMods.map { it.folderName }, false)
-                        },
-                        enabled = (!busy || localToggleBusy) && enabledMods.isNotEmpty(),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(4.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BmmColor.PanelRaised),
-                    ) {
-                        Icon(Icons.Filled.PowerSettingsNew, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Disable all")
-                    }
-                }
-                if (visibleUpdateMods.isNotEmpty()) {
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onInstallAll(visibleUpdateMods)
-                        },
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(4.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BmmColor.Green),
-                    ) {
-                        Icon(Icons.Filled.SystemUpdateAlt, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Update all (${visibleUpdateMods.size})")
+            BoxWithConstraints {
+                val wideLayout = maxWidth >= 600.dp
+                Column(verticalArrangement = Arrangement.spacedBy(if (wideLayout) 8.dp else 12.dp)) {
+                    if (wideLayout) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Installed Mods", style = MaterialTheme.typography.titleLarge, color = BmmColor.Gold)
+                            InstalledSearchField(installedQuery, { installedQuery = it }, Modifier.weight(1f))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            InstalledActionButton("Import", Icons.Filled.Folder, !busy, BmmColor.Green, Modifier.weight(1f), onPickArchive)
+                            InstalledActionButton(
+                                "Enable all", Icons.Filled.PowerSettingsNew,
+                                (!busy || localToggleBusy) && disabledMods.isNotEmpty(),
+                                BmmColor.Green, Modifier.weight(1f),
+                            ) { onSetLocalModsEnabled(disabledMods.map { it.folderName }, true) }
+                            InstalledActionButton(
+                                "Disable all", Icons.Filled.PowerSettingsNew,
+                                (!busy || localToggleBusy) && enabledMods.isNotEmpty(),
+                                BmmColor.PanelRaised, Modifier.weight(1f),
+                            ) { onSetLocalModsEnabled(enabledMods.map { it.folderName }, false) }
+                            if (visibleUpdateMods.isNotEmpty()) {
+                                InstalledActionButton(
+                                    "Update all (${visibleUpdateMods.size})", Icons.Filled.SystemUpdateAlt,
+                                    !busy, BmmColor.Green, Modifier.weight(1f),
+                                ) { onInstallAll(visibleUpdateMods) }
+                            }
+                        }
+                    } else {
+                        Text("Installed Mods", style = MaterialTheme.typography.headlineSmall, color = BmmColor.Gold)
+                        InstalledSearchField(installedQuery, { installedQuery = it }, Modifier.fillMaxWidth())
+                        InstalledActionButton(
+                            "Import mod / modpack", Icons.Filled.Folder, !busy, BmmColor.Green,
+                            Modifier.fillMaxWidth(), onPickArchive,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            InstalledActionButton(
+                                "Enable all", Icons.Filled.PowerSettingsNew,
+                                (!busy || localToggleBusy) && disabledMods.isNotEmpty(),
+                                BmmColor.Green, Modifier.weight(1f),
+                            ) { onSetLocalModsEnabled(disabledMods.map { it.folderName }, true) }
+                            InstalledActionButton(
+                                "Disable all", Icons.Filled.PowerSettingsNew,
+                                (!busy || localToggleBusy) && enabledMods.isNotEmpty(),
+                                BmmColor.PanelRaised, Modifier.weight(1f),
+                            ) { onSetLocalModsEnabled(enabledMods.map { it.folderName }, false) }
+                        }
+                        if (visibleUpdateMods.isNotEmpty()) {
+                            InstalledActionButton(
+                                "Update all (${visibleUpdateMods.size})", Icons.Filled.SystemUpdateAlt,
+                                !busy, BmmColor.Green, Modifier.fillMaxWidth(),
+                            ) { onInstallAll(visibleUpdateMods) }
+                        }
                     }
                 }
             }
@@ -245,7 +220,6 @@ fun InstalledScreen(
                     enabled = local.enabled,
                     hasUpdate = hasUpdate,
                     canGetOfficial = manifest == null && item.hasCatalogMatch,
-                    cardSize = visualSettings.cardSize,
                     operation = operation,
                     busy = busy,
                     localToggleBusy = localToggleBusy,
@@ -280,7 +254,6 @@ fun InstalledScreen(
                     enabled = local.enabled,
                     hasUpdate = hasUpdate,
                     canGetOfficial = manifest == null && item.hasCatalogMatch,
-                    cardSize = visualSettings.cardSize,
                     operation = operation,
                     busy = busy,
                     localToggleBusy = localToggleBusy,
@@ -296,6 +269,55 @@ fun InstalledScreen(
         }
 
     }
+    }
+}
+
+@Composable
+private fun InstalledSearchField(value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = BmmColor.MutedCream) },
+        placeholder = { Text("Filter installed mods...", color = BmmColor.MutedCream) },
+        singleLine = true,
+        shape = RoundedCornerShape(4.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = BmmColor.Input,
+            unfocusedContainerColor = BmmColor.Input,
+            disabledContainerColor = BmmColor.Input,
+            focusedBorderColor = BmmColor.Gold,
+            unfocusedBorderColor = BmmColor.Neutral,
+            cursorColor = BmmColor.Gold,
+            focusedTextColor = BmmColor.Cream,
+            unfocusedTextColor = BmmColor.Cream,
+        ),
+    )
+}
+
+@Composable
+private fun InstalledActionButton(
+    label: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    containerColor: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val haptic = LocalHapticFeedback.current
+    Button(
+        onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onClick()
+        },
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(4.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor, contentColor = BmmColor.Cream),
+    ) {
+        Icon(icon, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Text(label, maxLines = 1)
     }
 }
 

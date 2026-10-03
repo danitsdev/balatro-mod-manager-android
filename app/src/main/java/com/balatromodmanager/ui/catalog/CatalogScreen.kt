@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -141,12 +143,13 @@ internal fun CatalogScreen(
         paused = state.operation is OperationState.Running,
     )
 
+    val showInitialCatalogLoader = state.isCatalogLoading && state.catalogMods.isEmpty()
     PullToRefreshBox(
-        isRefreshing = state.isCatalogRefreshing,
+        isRefreshing = state.isCatalogRefreshing && !showInitialCatalogLoader,
         onRefresh = onRefreshCatalog,
         modifier = Modifier.fillMaxSize().padding(padding),
     ) {
-        if (state.isCatalogLoading && state.catalogMods.isEmpty()) {
+        if (showInitialCatalogLoader) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.Center,
@@ -159,7 +162,7 @@ internal fun CatalogScreen(
         } else {
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Fixed(visualSettings.cardSize.columnsPerRow),
+                columns = GridCells.Adaptive(visualSettings.cardSize.minimumCellWidthDp.dp),
                 modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -178,7 +181,6 @@ internal fun CatalogScreen(
                         enabled = localMod?.enabled,
                         hasUpdate = manifest?.let { mod.hasUpdateFor(it) } == true,
                         canGetOfficial = manifest == null && localMod != null,
-                        cardSize = visualSettings.cardSize,
                         operation = (state.operation as? OperationState.Running)
                             ?.takeIf { it.downloadingModId == mod.id },
                         busy = state.operation is OperationState.Running,
@@ -207,48 +209,82 @@ private fun CatalogHeader(
     onSortChange: (CatalogSortMode) -> Unit,
     onClearOperation: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            HeroHeader()
-            if (state.isCatalogRefreshing) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(color = BmmColor.Gold, modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Refreshing catalog in background...", color = BmmColor.MutedCream, style = MaterialTheme.typography.labelSmall)
+    val onSearchChange: (String) -> Unit = { query ->
+        if (query.isNotBlank() && state.filters.selectedCategory != null) {
+            onCategoryChange(null)
+        }
+        onQueryChange(query)
+    }
+
+    BoxWithConstraints {
+        val wideLayout = maxWidth >= 600.dp
+        val contentWidth = maxWidth
+        Column(verticalArrangement = Arrangement.spacedBy(if (wideLayout) 8.dp else 12.dp)) {
+            if (wideLayout) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Mod Catalog", style = MaterialTheme.typography.titleLarge, color = BmmColor.Cream)
+                    CatalogSearchField(state.filters.query, onSearchChange, Modifier.weight(1f))
                 }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    HeroHeader()
+                    if (state.isCatalogRefreshing) CatalogRefreshIndicator()
+                }
+                CatalogSearchField(state.filters.query, onSearchChange, Modifier.fillMaxWidth())
+            }
+
+            if (wideLayout && state.isCatalogRefreshing) CatalogRefreshIndicator()
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                val filterWidth = minOf(contentWidth / 2, if (wideLayout) 280.dp else contentWidth)
+                CategoryBar(
+                    state.categories,
+                    state.filters.selectedCategory,
+                    onCategoryChange,
+                    Modifier.weight(1f).widthIn(max = filterWidth),
+                )
+                SortBar(
+                    state.filters.sortMode,
+                    onSortChange,
+                    Modifier.weight(1f).widthIn(max = filterWidth),
+                )
             }
         }
-        OutlinedTextField(
-            value = state.filters.query,
-            onValueChange = { query ->
-                if (query.isNotBlank() && state.filters.selectedCategory != null) {
-                    onCategoryChange(null)
-                }
-                onQueryChange(query)
-            },
-            modifier = Modifier.fillMaxWidth(),
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = BmmColor.MutedCream) },
-            placeholder = {
-                Text("Search mods...", color = BmmColor.MutedCream, style = MaterialTheme.typography.bodyLarge)
-            },
-            textStyle = MaterialTheme.typography.bodyLarge,
-            singleLine = true,
-            shape = RoundedCornerShape(4.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = BmmColor.Input,
-                unfocusedContainerColor = BmmColor.Input,
-                disabledContainerColor = BmmColor.Input,
-                focusedBorderColor = BmmColor.Gold,
-                unfocusedBorderColor = BmmColor.Neutral,
-                cursorColor = BmmColor.Gold,
-                focusedTextColor = BmmColor.Cream,
-                unfocusedTextColor = BmmColor.Cream,
-            ),
-        )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            CategoryBar(state.categories, state.filters.selectedCategory, onCategoryChange, Modifier.weight(1f))
-            SortBar(state.filters.sortMode, onSortChange, Modifier.weight(1f))
-        }
+    }
+}
+
+@Composable
+private fun CatalogSearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier,
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = BmmColor.MutedCream) },
+        placeholder = {
+            Text("Search mods...", color = BmmColor.MutedCream, style = MaterialTheme.typography.bodyLarge)
+        },
+        textStyle = MaterialTheme.typography.bodyLarge,
+        singleLine = true,
+        shape = RoundedCornerShape(4.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = BmmColor.Input,
+            unfocusedContainerColor = BmmColor.Input,
+            disabledContainerColor = BmmColor.Input,
+            focusedBorderColor = BmmColor.Gold,
+            unfocusedBorderColor = BmmColor.Neutral,
+            cursorColor = BmmColor.Gold,
+            focusedTextColor = BmmColor.Cream,
+            unfocusedTextColor = BmmColor.Cream,
+        ),
+    )
+}
+
+@Composable
+private fun CatalogRefreshIndicator() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(color = BmmColor.Gold, modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+        Spacer(Modifier.width(6.dp))
+        Text("Refreshing catalog in background...", color = BmmColor.MutedCream, style = MaterialTheme.typography.labelSmall)
     }
 }
 

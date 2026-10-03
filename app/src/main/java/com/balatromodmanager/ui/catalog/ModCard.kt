@@ -45,7 +45,6 @@ import com.balatromodmanager.OperationState
 import com.balatromodmanager.catalog.CatalogMod
 import com.balatromodmanager.domain.ModPrimaryAction
 import com.balatromodmanager.domain.resolveModPrimaryAction
-import com.balatromodmanager.settings.CatalogCardSize
 import com.balatromodmanager.shortDescription
 import com.balatromodmanager.ui.theme.BmmColor
 
@@ -59,7 +58,6 @@ internal fun ModCard(
     operation: OperationState.Running?,
     busy: Boolean,
     localToggleBusy: Boolean,
-    cardSize: CatalogCardSize = CatalogCardSize.MEDIUM,
     openEnabled: Boolean = true,
     onOpen: () -> Unit,
     onInstall: () -> Unit,
@@ -71,7 +69,6 @@ internal fun ModCard(
     val (base, stripe) = desktopCardColors(mod.title, BmmColor.darkMode)
     val cardShape = RoundedCornerShape(4.dp)
     val action = resolveModPrimaryAction(installed, hasUpdate, canGetOfficial)
-    val compact = cardSize == CatalogCardSize.SMALL
 
     Card(
         modifier = Modifier
@@ -86,8 +83,8 @@ internal fun ModCard(
     ) {
         BoxWithConstraints(Modifier.fillMaxWidth().background(base, cardShape)) {
             val cardWidth = maxWidth
-            val horizontal = cardSize == CatalogCardSize.LARGE ||
-                (cardSize == CatalogCardSize.MEDIUM && cardWidth >= 300.dp)
+            val compact = cardWidth < 145.dp
+            val horizontal = cardWidth >= 300.dp
             if (horizontal) {
                 val imageSize = (cardWidth * 0.34f).coerceAtLeast(124.dp).coerceAtMost(160.dp)
                 Row(

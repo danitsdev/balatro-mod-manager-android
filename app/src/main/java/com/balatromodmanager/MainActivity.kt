@@ -7,10 +7,28 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Inventory2
@@ -34,10 +52,14 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.datastore.preferences.preferencesDataStore
@@ -65,7 +87,6 @@ import com.balatromodmanager.ui.LicensesScreen
 import com.balatromodmanager.ui.LoadingScreen
 import com.balatromodmanager.ui.OnboardingScreen
 import com.balatromodmanager.ui.SettingsScreen
-import com.balatromodmanager.ui.compactSystemBarPadding
 import com.balatromodmanager.ui.catalog.CatalogScreen
 
 internal val android.content.Context.settingsDataStore by preferencesDataStore(name = "settings")
@@ -210,6 +231,14 @@ private fun ConnectedShell(
     val detailHistory = remember { mutableListOf<String>() }
     var showLicenses by rememberSaveable { mutableStateOf(false) }
     val destination = AppDestination.valueOf(selected)
+    val haptic = LocalHapticFeedback.current
+    val compactNavigation = LocalConfiguration.current.screenHeightDp < 480
+
+    fun selectDestination(item: AppDestination) {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        showLicenses = false
+        selected = item.name
+    }
 
     fun backFromModDetails() {
         val parentModId = detailHistory.removeLastOrNull()
@@ -257,9 +286,11 @@ private fun ConnectedShell(
     }
 
     Scaffold(
-        modifier = Modifier.padding(compactSystemBarPadding(includeBottom = false)),
+        modifier = Modifier.padding(
+            top = WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding() / 2,
+        ),
         containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             state.appUpdateNotice?.let { notice ->
@@ -271,30 +302,29 @@ private fun ConnectedShell(
             }
         },
         bottomBar = {
-            val haptic = LocalHapticFeedback.current
-            NavigationBar(
-                containerColor = BmmColor.PanelOpaque,
-                tonalElevation = 0.dp,
-                windowInsets = WindowInsets.navigationBars,
-            ) {
-                AppDestination.entries.forEach { item ->
-                    NavigationBarItem(
-                        selected = item == destination,
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showLicenses = false
-                            selected = item.name
-                        },
-                        icon = { Icon(item.icon, contentDescription = item.label) },
-                        label = { Text(item.label, maxLines = 1, style = MaterialTheme.typography.labelLarge) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = BmmColor.Gold,
-                            selectedTextColor = BmmColor.Gold,
-                            indicatorColor = Color.Transparent,
-                            unselectedIconColor = BmmColor.MutedCream,
-                            unselectedTextColor = BmmColor.MutedCream,
-                        ),
-                    )
+            if (compactNavigation) {
+                CompactAppNavigationBar(destination, ::selectDestination)
+            } else {
+                NavigationBar(
+                    containerColor = BmmColor.PanelOpaque,
+                    tonalElevation = 0.dp,
+                    windowInsets = WindowInsets.navigationBars,
+                ) {
+                    AppDestination.entries.forEach { item ->
+                        NavigationBarItem(
+                            selected = item == destination,
+                            onClick = { selectDestination(item) },
+                            icon = { Icon(item.icon, contentDescription = item.label) },
+                            label = { Text(item.label, maxLines = 1, style = MaterialTheme.typography.labelLarge) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = BmmColor.Gold,
+                                selectedTextColor = BmmColor.Gold,
+                                indicatorColor = Color.Transparent,
+                                unselectedIconColor = BmmColor.MutedCream,
+                                unselectedTextColor = BmmColor.MutedCream,
+                            ),
+                        )
+                    }
                 }
             }
         },
@@ -369,5 +399,40 @@ private fun ConnectedShell(
             },
             onDismiss = { dependencyPrompt = null },
         )
+    }
+}
+
+@Composable
+private fun CompactAppNavigationBar(
+    destination: AppDestination,
+    onSelect: (AppDestination) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().background(BmmColor.PanelOpaque)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
+                .height(56.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            AppDestination.entries.forEach { item ->
+                val selected = item == destination
+                val contentColor = if (selected) BmmColor.Gold else BmmColor.MutedCream
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (selected) BmmColor.Gold.copy(alpha = 0.12f) else Color.Transparent)
+                        .clickable { onSelect(item) },
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(item.icon, contentDescription = item.label, tint = contentColor, modifier = Modifier.size(18.dp))
+                    Text(item.label, color = contentColor, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                }
+            }
+        }
+        Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
     }
 }

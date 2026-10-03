@@ -15,7 +15,7 @@ Install and manage mods on Android builds of Balatro. The catalog and package do
 - Install or update Thunderstore mods. Enable, disable, and remove installed mods.
 - Import mod and modpack ZIPs from your device.
 - Manage mods copied into the game folder, even when they are not listed on Thunderstore.
-- Choose a dark or light theme and show 3, 2, or 1 catalog card per row. Two per row is the default.
+- Choose a dark or light theme and a small, medium, or large card density. The number of cards per row adapts to the available screen width.
 - See a notice when a newer version of this app is published on GitHub.
 
 Manually copied and imported mods do not have automatic updates.
